@@ -40,7 +40,7 @@ jobs:
           class MainActivity : ComponentActivity() {
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
-                  MPVLib.init(this)   // required initialisation
+                  MPVLib.init(this)
 
                   setContent {
                       Box(modifier = Modifier.fillMaxSize()) {
@@ -89,16 +89,19 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('player-core/**/*.gradle*', 'player-core/buildscripts/**') }}
           restore-keys: ${{ runner.os }}-gradle-
 
-      - name: Build native dependencies (FFmpeg, libmpv)
+      # ----- 6. Build native dependencies (FFmpeg, libmpv) using the correct script -----
+      - name: Build native dependencies
         working-directory: player-core/buildscripts
-        run: ./build-all.sh   # This may take 30+ minutes
+        run: ./buildall.sh   # <-- CORRECTED: now points to the actual script
 
+      # ----- 7. Build release APK -----
       - name: Build release APK
         working-directory: player-core
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease
 
+      # ----- 8. Upload APK -----
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
