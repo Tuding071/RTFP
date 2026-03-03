@@ -55,7 +55,7 @@ jobs:
           }
           EOF
 
-      # ----- 3. Replace root build.gradle to include JitPack (FIXES SEEKER DEPENDENCY) -----
+      # ----- 3. Replace root build.gradle to include JitPack -----
       - name: Fix root build.gradle with JitPack
         run: |
           cat > player-core/build.gradle << 'EOF'
@@ -85,9 +85,12 @@ jobs:
           }
           EOF
 
-      # ----- 4. Enable Compose and add dependencies -----
-      - name: Enable Compose in app/build.gradle
+      # ----- 4. Enable Compose and add dependencies (including JitPack in app module) -----
+      - name: Enable Compose and add JitPack to app/build.gradle
         run: |
+          # First, ensure JitPack is in app's repositories (some modules may override)
+          sed -i '1i repositories {\n    maven { url "https://jitpack.io" }\n}\n' player-core/app/build.gradle
+
           # Add composeOptions and buildFeatures
           sed -i '/android {/a \    buildFeatures {\n        compose true\n    }' player-core/app/build.gradle
           sed -i '/android {/a \    composeOptions {\n        kotlinCompilerExtensionVersion = "1.5.4"\n    }' player-core/app/build.gradle
@@ -95,12 +98,17 @@ jobs:
           # Add Compose BOM and needed libraries to dependencies
           sed -i '/dependencies {/a \    implementation platform("androidx.compose:compose-bom:2024.02.00")\n    implementation "androidx.compose.ui:ui"\n    implementation "androidx.compose.material3:material3"\n    implementation "androidx.compose.ui:ui-tooling-preview"\n    implementation "androidx.activity:activity-compose:1.8.0"\n    implementation "dev.vivvvek:seeker:0.1.5"\n    implementation "org.jetbrains.kotlinx:kotlinx-collections-immutable:0.3.7"' player-core/app/build.gradle
 
-      # ----- 5. Change app name to RTFP -----
+      # ----- 5. Suppress compileSdk warning (optional) -----
+      - name: Add gradle.properties to suppress compileSdk warning
+        run: |
+          echo "android.suppressUnsupportedCompileSdk=34" >> player-core/gradle.properties
+
+      # ----- 6. Change app name to RTFP -----
       - name: Set app name
         run: |
           sed -i 's/<string name="app_name">.*<\/string>/<string name="app_name">RTFP<\/string>/' player-core/app/src/main/res/values/strings.xml
 
-      # ----- 6. Set up JDK, SDK, cache -----
+      # ----- 7. Set up JDK, SDK, cache -----
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -110,18 +118,17 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      # ----- 7. Cache native sources and build artifacts -----
       - name: Cache Gradle and native build artifacts
         uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
             player-core/buildscripts/.cache
-            player-core/buildscripts/deps          # <-- Cache the downloaded source repos
+            player-core/buildscripts/deps
           key: ${{ runner.os }}-native-${{ hashFiles('player-core/buildscripts/download.sh', 'player-core/buildscripts/buildall.sh') }}
           restore-keys: ${{ runner.os }}-native-
 
-      # ----- 8. Download native dependencies with retry -----
+      # ----- 8. Download native sources with retry -----
       - name: Download native sources (with retry)
         working-directory: player-core/buildscripts
         run: |
@@ -138,7 +145,7 @@ jobs:
           echo "All download attempts failed."
           exit 1
 
-      # ----- 9. Build native dependencies (FFmpeg, libmpv) -----
+      # ----- 9. Build native dependencies -----
       - name: Build native dependencies
         working-directory: player-core/buildscripts
         run: ./buildall.sh
