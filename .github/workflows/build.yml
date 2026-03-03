@@ -10,18 +10,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout your repo (contains workflow and overlay)
+      - name: Checkout your repo
         uses: actions/checkout@v4
 
-      - name: Clone mpvEx (Compose‑based player)
+      - name: Clone mpvEx
         run: git clone --depth 1 https://github.com/marlboro-advance/mpvEx.git player-core
 
-      - name: Copy your custom overlay into the correct package
+      - name: Copy and fix your overlay
         run: |
-          # Create the target directory if it doesn't exist
+          # Copy overlay to correct package
           mkdir -p player-core/app/src/main/java/app/marlboroadvance/mpvex/ui/player
-          # Copy PlayerOverlay.kt from the root of your repo
           cp PlayerOverlay.kt player-core/app/src/main/java/app/marlboroadvance/mpvex/ui/player/
+
+          # Fix imports: remove backticks and ensure MPVLib is imported
+          sed -i 's/import `is`.xyz.mpv.MPVLib/import is.xyz.mpv.MPVLib/' player-core/app/src/main/java/app/marlboroadvance/mpvex/ui/player/PlayerOverlay.kt
+          sed -i 's/import `is`.xyz.mpv.Utils/import is.xyz.mpv.Utils/' player-core/app/src/main/java/app/marlboroadvance/mpvex/ui/player/PlayerOverlay.kt
+
+          # If MPVLib still not found, add explicit import at top (just in case)
+          if ! grep -q "import is.xyz.mpv.MPVLib" player-core/app/src/main/java/app/marlboroadvance/mpvex/ui/player/PlayerOverlay.kt; then
+            sed -i '1i import is.xyz.mpv.MPVLib' player-core/app/src/main/java/app/marlboroadvance/mpvex/ui/player/PlayerOverlay.kt
+          fi
 
       - name: Change app name to RTFP
         run: |
