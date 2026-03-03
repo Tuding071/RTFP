@@ -55,15 +55,41 @@ jobs:
           }
           EOF
 
-      # ----- 3. Add JitPack repository to root build.gradle (allprojects) -----
-      - name: Add JitPack to root build.gradle
+      # ----- 3. Replace root build.gradle to include JitPack (FIXES SEEKER DEPENDENCY) -----
+      - name: Fix root build.gradle with JitPack
         run: |
-          # Insert JitPack inside the allprojects.repositories block
-          sed -i '/allprojects {/,/}/ {
-              /repositories {/,/}/ s/\(.*repositories.*\)/\1\n        maven { url "https:\/\/jitpack.io" }/
-          }' player-core/build.gradle
+          cat > player-core/build.gradle << 'EOF'
+          buildscript {
+              ext.kotlin_version = '1.9.0'
+              repositories {
+                  google()
+                  mavenCentral()
+                  maven { url 'https://jitpack.io' }
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.1.0'
+                  classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+              }
+          }
 
-      # ----- 4. Enable Compose and add dependencies -----
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+                  maven { url 'https://jitpack.io' }
+              }
+          }
+
+          task clean(type: Delete) {
+              delete rootProject.buildDir
+          }
+          EOF
+
+      # ----- 4. Verify root build.gradle (optional, remove later) -----
+      - name: Show root build.gradle
+        run: cat player-core/build.gradle
+
+      # ----- 5. Enable Compose and add dependencies -----
       - name: Enable Compose in app/build.gradle
         run: |
           # Add composeOptions and buildFeatures
@@ -73,18 +99,10 @@ jobs:
           # Add Compose BOM and needed libraries to dependencies
           sed -i '/dependencies {/a \    implementation platform("androidx.compose:compose-bom:2024.02.00")\n    implementation "androidx.compose.ui:ui"\n    implementation "androidx.compose.material3:material3"\n    implementation "androidx.compose.ui:ui-tooling-preview"\n    implementation "androidx.activity:activity-compose:1.8.0"\n    implementation "dev.vivvvek:seeker:0.1.5"\n    implementation "org.jetbrains.kotlinx:kotlinx-collections-immutable:0.3.7"' player-core/app/build.gradle
 
-      # ----- 5. Change app name to RTFP -----
+      # ----- 6. Change app name to RTFP -----
       - name: Set app name
         run: |
           sed -i 's/<string name="app_name">.*<\/string>/<string name="app_name">RTFP<\/string>/' player-core/app/src/main/res/values/strings.xml
-
-      # ----- 6. Debug: show repositories and dependencies -----
-      - name: Debug build.gradle files
-        run: |
-          echo "===== root build.gradle ====="
-          cat player-core/build.gradle
-          echo "===== app/build.gradle ====="
-          cat player-core/app/build.gradle
 
       # ----- 7. Set up JDK, SDK, cache -----
       - name: Set up JDK 17
