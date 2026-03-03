@@ -55,13 +55,16 @@ jobs:
           }
           EOF
 
-      # ----- 3. Add JitPack repository (required for seeker) -----
-      - name: Add JitPack to repositories
+      # ----- 3. Add JitPack repository directly to app/build.gradle -----
+      - name: Add JitPack to app module
         run: |
-          # Add to root build.gradle's allprojects block
-          sed -i '/allprojects {/a \        maven { url "https://jitpack.io" }' player-core/build.gradle
-          # Also add to app/build.gradle if it has its own repositories block
-          sed -i '/repositories {/a \        maven { url "https://jitpack.io" }' player-core/app/build.gradle || true
+          # Prepend repositories block to app/build.gradle
+          echo "repositories {" > temp
+          echo "    maven { url 'https://jitpack.io' }" >> temp
+          echo "}" >> temp
+          echo "" >> temp
+          cat player-core/app/build.gradle >> temp
+          mv temp player-core/app/build.gradle
 
       # ----- 4. Enable Compose and add dependencies -----
       - name: Enable Compose in app/build.gradle
