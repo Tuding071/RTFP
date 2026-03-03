@@ -55,16 +55,13 @@ jobs:
           }
           EOF
 
-      # ----- 3. Add JitPack repository directly to app/build.gradle -----
-      - name: Add JitPack to app module
+      # ----- 3. Add JitPack repository to root build.gradle (allprojects) -----
+      - name: Add JitPack to root build.gradle
         run: |
-          # Prepend repositories block to app/build.gradle
-          echo "repositories {" > temp
-          echo "    maven { url 'https://jitpack.io' }" >> temp
-          echo "}" >> temp
-          echo "" >> temp
-          cat player-core/app/build.gradle >> temp
-          mv temp player-core/app/build.gradle
+          # Insert JitPack inside the allprojects.repositories block
+          sed -i '/allprojects {/,/}/ {
+              /repositories {/,/}/ s/\(.*repositories.*\)/\1\n        maven { url "https:\/\/jitpack.io" }/
+          }' player-core/build.gradle
 
       # ----- 4. Enable Compose and add dependencies -----
       - name: Enable Compose in app/build.gradle
@@ -81,7 +78,15 @@ jobs:
         run: |
           sed -i 's/<string name="app_name">.*<\/string>/<string name="app_name">RTFP<\/string>/' player-core/app/src/main/res/values/strings.xml
 
-      # ----- 6. Set up JDK, SDK, cache -----
+      # ----- 6. Debug: show repositories and dependencies -----
+      - name: Debug build.gradle files
+        run: |
+          echo "===== root build.gradle ====="
+          cat player-core/build.gradle
+          echo "===== app/build.gradle ====="
+          cat player-core/app/build.gradle
+
+      # ----- 7. Set up JDK, SDK, cache -----
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -100,24 +105,24 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('player-core/**/*.gradle*', 'player-core/buildscripts/**') }}
           restore-keys: ${{ runner.os }}-gradle-
 
-      # ----- 7. Download native dependencies (FFmpeg, mpv, etc.) -----
+      # ----- 8. Download native dependencies (FFmpeg, mpv, etc.) -----
       - name: Download native sources
         working-directory: player-core/buildscripts
         run: ./download.sh
 
-      # ----- 8. Build native dependencies (FFmpeg, libmpv) -----
+      # ----- 9. Build native dependencies (FFmpeg, libmpv) -----
       - name: Build native dependencies
         working-directory: player-core/buildscripts
         run: ./buildall.sh
 
-      # ----- 9. Build release APK -----
+      # ----- 10. Build release APK -----
       - name: Build release APK
         working-directory: player-core
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease
 
-      # ----- 10. Upload APK -----
+      # ----- 11. Upload APK -----
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
