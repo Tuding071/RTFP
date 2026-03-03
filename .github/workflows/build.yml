@@ -55,7 +55,15 @@ jobs:
           }
           EOF
 
-      # ----- 3. Enable Compose and add dependencies -----
+      # ----- 3. Add JitPack repository (required for seeker) -----
+      - name: Add JitPack to repositories
+        run: |
+          # Add to root build.gradle's allprojects block
+          sed -i '/allprojects {/a \        maven { url "https://jitpack.io" }' player-core/build.gradle
+          # Also add to app/build.gradle if it has its own repositories block
+          sed -i '/repositories {/a \        maven { url "https://jitpack.io" }' player-core/app/build.gradle || true
+
+      # ----- 4. Enable Compose and add dependencies -----
       - name: Enable Compose in app/build.gradle
         run: |
           # Add composeOptions and buildFeatures
@@ -65,12 +73,12 @@ jobs:
           # Add Compose BOM and needed libraries to dependencies
           sed -i '/dependencies {/a \    implementation platform("androidx.compose:compose-bom:2024.02.00")\n    implementation "androidx.compose.ui:ui"\n    implementation "androidx.compose.material3:material3"\n    implementation "androidx.compose.ui:ui-tooling-preview"\n    implementation "androidx.activity:activity-compose:1.8.0"\n    implementation "dev.vivvvek:seeker:0.1.5"\n    implementation "org.jetbrains.kotlinx:kotlinx-collections-immutable:0.3.7"' player-core/app/build.gradle
 
-      # ----- 4. Change app name to RTFP -----
+      # ----- 5. Change app name to RTFP -----
       - name: Set app name
         run: |
           sed -i 's/<string name="app_name">.*<\/string>/<string name="app_name">RTFP<\/string>/' player-core/app/src/main/res/values/strings.xml
 
-      # ----- 5. Set up JDK, SDK, cache -----
+      # ----- 6. Set up JDK, SDK, cache -----
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -89,24 +97,24 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('player-core/**/*.gradle*', 'player-core/buildscripts/**') }}
           restore-keys: ${{ runner.os }}-gradle-
 
-      # ----- 6. Download native dependencies (FFmpeg, mpv, etc.) -----
+      # ----- 7. Download native dependencies (FFmpeg, mpv, etc.) -----
       - name: Download native sources
         working-directory: player-core/buildscripts
-        run: ./download.sh   # Fetches source tarballs into deps/
+        run: ./download.sh
 
-      # ----- 7. Build native dependencies (FFmpeg, libmpv) -----
+      # ----- 8. Build native dependencies (FFmpeg, libmpv) -----
       - name: Build native dependencies
         working-directory: player-core/buildscripts
-        run: ./buildall.sh   # Now deps/ is populated
+        run: ./buildall.sh
 
-      # ----- 8. Build release APK -----
+      # ----- 9. Build release APK -----
       - name: Build release APK
         working-directory: player-core
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease
 
-      # ----- 9. Upload APK -----
+      # ----- 10. Upload APK -----
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
