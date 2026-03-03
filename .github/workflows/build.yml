@@ -70,7 +70,7 @@ jobs:
         run: |
           sed -i 's/<string name="app_name">.*<\/string>/<string name="app_name">RTFP<\/string>/' player-core/app/src/main/res/values/strings.xml
 
-      # ----- 5. Set up JDK, SDK, cache, and build -----
+      # ----- 5. Set up JDK, SDK, cache -----
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -89,19 +89,24 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('player-core/**/*.gradle*', 'player-core/buildscripts/**') }}
           restore-keys: ${{ runner.os }}-gradle-
 
-      # ----- 6. Build native dependencies (FFmpeg, libmpv) using the correct script -----
+      # ----- 6. Download native dependencies (FFmpeg, mpv, etc.) -----
+      - name: Download native sources
+        working-directory: player-core/buildscripts
+        run: ./download.sh   # Fetches source tarballs into deps/
+
+      # ----- 7. Build native dependencies (FFmpeg, libmpv) -----
       - name: Build native dependencies
         working-directory: player-core/buildscripts
-        run: ./buildall.sh   # <-- CORRECTED: now points to the actual script
+        run: ./buildall.sh   # Now deps/ is populated
 
-      # ----- 7. Build release APK -----
+      # ----- 8. Build release APK -----
       - name: Build release APK
         working-directory: player-core
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease
 
-      # ----- 8. Upload APK -----
+      # ----- 9. Upload APK -----
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
