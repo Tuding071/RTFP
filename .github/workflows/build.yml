@@ -33,6 +33,13 @@ jobs:
           # Copy Player.kt to source
           cp Player.kt app/src/main/java/com/rtfp/
 
+          # Generate gradle.properties (enable AndroidX)
+          cat > gradle.properties << EOF
+          android.useAndroidX=true
+          android.enableJetifier=true
+          org.gradle.jvmargs=-Xmx2048m
+          EOF
+
           # Generate root build.gradle.kts (project level)
           cat > build.gradle.kts << EOF
           buildscript {
