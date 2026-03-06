@@ -1,55 +1,96 @@
-name: Build RTFP Player
+name: Build APK
 
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
+on: [push, pull_request]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout your repo
-        uses: actions/checkout@v4
-
-      - name: Clone mpvEx
-        run: git clone --depth 1 https://github.com/marlboro-advance/mpvEx.git player-core
-
-      - name: Copy and fix your overlay
-        run: |
-          # Copy overlay to correct package
-          mkdir -p player-core/app/src/main/java/app/marlboroadvance/mpvex/ui/player
-          cp PlayerOverlay.kt player-core/app/src/main/java/app/marlboroadvance/mpvex/ui/player/
-
-          # Fix imports: remove backticks and ensure MPVLib is imported
-          sed -i 's/import `is`.xyz.mpv.MPVLib/import is.xyz.mpv.MPVLib/' player-core/app/src/main/java/app/marlboroadvance/mpvex/ui/player/PlayerOverlay.kt
-          sed -i 's/import `is`.xyz.mpv.Utils/import is.xyz.mpv.Utils/' player-core/app/src/main/java/app/marlboroadvance/mpvex/ui/player/PlayerOverlay.kt
-
-          # If MPVLib still not found, add explicit import at top (just in case)
-          if ! grep -q "import is.xyz.mpv.MPVLib" player-core/app/src/main/java/app/marlboroadvance/mpvex/ui/player/PlayerOverlay.kt; then
-            sed -i '1i import is.xyz.mpv.MPVLib' player-core/app/src/main/java/app/marlboroadvance/mpvex/ui/player/PlayerOverlay.kt
-          fi
-
-      - name: Change app name to RTFP
-        run: |
-          sed -i 's/<string name="app_name">.*<\/string>/<string name="app_name">RTFP<\/string>/' \
-            player-core/app/src/main/res/values/strings.xml
+      - uses: actions/checkout@v4
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: '17'
+          distribution: 'zulu'
+          java-version: 17
 
-      - name: Build release APK
-        working-directory: player-core
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Generate Android project
+        run: |
+          mkdir -p app/src/main/java/com/rtfp
+          mkdir -p app/src/main/res/values
+          mkdir -p app/libs
+
+          # Copy Player.kt to source
+          cp Player.kt app/src/main/java/com/rtfp/
+
+          # Generate AndroidManifest.xml
+          cat > app/src/main/AndroidManifest.xml << EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest package="com.rtfp">
+            <uses-permission android:name="android.permission.INTERNET" />
+            <application android:label="RTFP" android:theme="@style/Theme.AppCompat">
+              <activity android:name=".PlayerActivity" android:exported="true">
+                <intent-filter>
+                  <action android:name="android.intent.action.MAIN" />
+                  <category android:name="android.intent.category.LAUNCHER" />
+                </intent-filter>
+              </activity>
+            </application>
+          </manifest>
+          EOF
+
+          # Generate build.gradle.kts
+          cat > app/build.gradle.kts << EOF
+          plugins {
+              id("com.android.application")
+              kotlin("android")
+          }
+          android {
+              namespace = "com.rtfp"
+              compileSdk = 34
+              defaultConfig {
+                  minSdk = 21
+                  targetSdk = 34
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+          dependencies {
+              implementation("androidx.appcompat:appcompat:1.6.1")
+              implementation("androidx.media3:media3-exoplayer:1.4.0")
+              implementation("androidx.media3:media3-ui:1.4.0")
+              implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar", "*.so"))))
+          }
+          EOF
+
+          # Generate settings.gradle.kts
+          cat > settings.gradle.kts << EOF
+          include(":app")
+          EOF
+
+      - name: Download FFmpeg prebuilt libraries
+        run: |
+          # Example: fetch ffmpeg-kit release for android
+          wget https://github.com/arthenica/ffmpeg-kit/releases/download/v6.0/ffmpeg-kit-6.0-android-lib-release.zip
+          unzip ffmpeg-kit-*-android-lib-release.zip -d ffmpeg-libs
+          cp ffmpeg-libs/ffmpeg-kit/arm64-v8a/libffmpegkit.so app/libs/
+          # Also copy for other ABIs if needed
+
+      - name: Build APK
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease
+          ./gradlew assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: RTFP-Player
-          path: player-core/app/build/outputs/apk/release/*.apk
+          name: app-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
