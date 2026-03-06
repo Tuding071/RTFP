@@ -40,7 +40,7 @@ jobs:
           org.gradle.jvmargs=-Xmx2048m
           EOF
 
-          # Generate root build.gradle.kts (project level)
+          # Generate root build.gradle.kts
           cat > build.gradle.kts << EOF
           buildscript {
               repositories {
@@ -100,11 +100,10 @@ jobs:
           }
           EOF
 
-          # Generate AndroidManifest.xml with proper namespace
+          # Generate AndroidManifest.xml (remove package attribute)
           cat > app/src/main/AndroidManifest.xml << EOF
           <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="com.rtfp">
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
             <uses-permission android:name="android.permission.INTERNET" />
             <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
             <application android:label="RTFP" android:theme="@style/Theme.AppCompat">
@@ -373,7 +372,6 @@ jobs:
           mv libffmpeg_wrapper.so app/src/main/jniLibs/$ABI/
 
       - name: Build APK
-        # Use system gradle (no wrapper needed)
         run: gradle assembleDebug
 
       - name: Upload APK
