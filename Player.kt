@@ -10,6 +10,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -150,26 +151,37 @@ class PlayerActivity : AppCompatActivity() {
         when (intent.action) {
             Intent.ACTION_VIEW -> {
                 val uri = intent.data ?: return
-                // Check permission
-                if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
-                    != PackageManager.PERMISSION_GRANTED
-                ) {
-                    // Request permission
-                    ActivityCompat.requestPermissions(
-                        this,
-                        arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE),
-                        PERMISSION_REQUEST_READ_STORAGE
-                    )
-                    // Save URI for later
-                    pendingUri = uri
-                } else {
-                    openVideoFromUri(uri)
+                // For content:// URIs, we don't need any permission (temporary grant)
+                if (uri.scheme == ContentResolver.SCHEME_CONTENT) {
+                    openVideoFromContentUri(uri)
+                } else if (uri.scheme == ContentResolver.SCHEME_FILE) {
+                    // For file:// URIs, we may need permission on older Androids
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                        // Only below Android 10 we need to request permission
+                        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+                            != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            // Save URI and request permission
+                            pendingFileUri = uri
+                            ActivityCompat.requestPermissions(
+                                this,
+                                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE),
+                                PERMISSION_REQUEST_READ_STORAGE
+                            )
+                        } else {
+                            openVideoFromFileUri(uri)
+                        }
+                    } else {
+                        // On Android 10+, file:// URIs are not allowed; but if we get one,
+                        // we can still try to open it (maybe it's from external storage?)
+                        openVideoFromFileUri(uri)
+                    }
                 }
             }
         }
     }
 
-    private var pendingUri: Uri? = null
+    private var pendingFileUri: Uri? = null
 
     override fun onRequestPermissionsResult(
         requestCode: Int,
@@ -180,47 +192,51 @@ class PlayerActivity : AppCompatActivity() {
         when (requestCode) {
             PERMISSION_REQUEST_READ_STORAGE -> {
                 if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    pendingUri?.let { openVideoFromUri(it) }
-                    pendingUri = null
+                    pendingFileUri?.let { openVideoFromFileUri(it) }
                 } else {
-                    Toast.makeText(this, "Storage permission required", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, "Storage permission denied", Toast.LENGTH_SHORT).show()
                 }
+                pendingFileUri = null
             }
         }
     }
 
-    private fun openVideoFromUri(uri: Uri) {
-        val file = uriToFile(uri)
-        if (file != null && file.exists()) {
+    // For content:// URIs – no permission needed, just copy to cache
+    private fun openVideoFromContentUri(uri: Uri) {
+        val file = copyContentUriToCache(uri)
+        if (file != null) {
             openVideoFile(file)
         } else {
-            Toast.makeText(this, "Cannot open video file", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Cannot open video", Toast.LENGTH_SHORT).show()
         }
     }
 
-    // Convert Uri to File (handles file:// and content://)
-    private fun uriToFile(uri: Uri): File? {
-        return when (uri.scheme) {
-            ContentResolver.SCHEME_FILE -> File(uri.path!!)
-            ContentResolver.SCHEME_CONTENT -> {
-                // Copy to cache directory
-                val cursor = contentResolver.query(uri, null, null, null, null)
-                cursor?.use {
-                    if (it.moveToFirst()) {
-                        val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                        val name = it.getString(nameIndex)
-                        val inputStream = contentResolver.openInputStream(uri) ?: return null
-                        val outFile = File(cacheDir, name)
-                        FileOutputStream(outFile).use { output ->
-                            inputStream.copyTo(output)
-                        }
-                        return outFile
-                    }
-                }
-                null
-            }
-            else -> null
+    // For file:// URIs – try to open directly
+    private fun openVideoFromFileUri(uri: Uri) {
+        val file = File(uri.path!!)
+        if (file.exists()) {
+            openVideoFile(file)
+        } else {
+            Toast.makeText(this, "File not found", Toast.LENGTH_SHORT).show()
         }
+    }
+
+    // Copy content URI to cache and return a File
+    private fun copyContentUriToCache(uri: Uri): File? {
+        val cursor = contentResolver.query(uri, null, null, null, null)
+        cursor?.use {
+            if (it.moveToFirst()) {
+                val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val name = it.getString(nameIndex)
+                val inputStream = contentResolver.openInputStream(uri) ?: return null
+                val outFile = File(cacheDir, name)
+                FileOutputStream(outFile).use { output ->
+                    inputStream.copyTo(output)
+                }
+                return outFile
+            }
+        }
+        return null
     }
 
     // ------------------------------------------------------------------------
@@ -258,13 +274,13 @@ class PlayerActivity : AppCompatActivity() {
         val mediaItem = MediaItem.fromUri(Uri.fromFile(file))
         exoPlayer?.setMediaItem(mediaItem)
         exoPlayer?.prepare()
-        exoPlayer?.playWhenReady = false
-        isPlaying = false
+        exoPlayer?.playWhenReady = true   // start playing immediately
+        isPlaying = true
 
         if (ffmpegHandle != 0L) nativeClose(ffmpegHandle)
         ffmpegHandle = nativeOpenFile(file.absolutePath)
 
-        Toast.makeText(this, "Opened: ${file.name}", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Playing: ${file.name}", Toast.LENGTH_SHORT).show()
     }
 
     // ------------------------------------------------------------------------
