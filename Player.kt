@@ -15,13 +15,16 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
+import android.util.Log
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
+import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -32,7 +35,8 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import java.io.File
-import java.io.FileOutputStream
+import java.io.PrintWriter
+import java.io.StringWriter
 
 class PlayerActivity : AppCompatActivity() {
 
@@ -41,13 +45,17 @@ class PlayerActivity : AppCompatActivity() {
     // ------------------------------------------------------------------------
     private lateinit var surfaceView: SurfaceView
     private lateinit var debugOverlay: TextView
+    private lateinit var errorLogView: ScrollView
+    private lateinit var errorLogText: TextView
+    private lateinit var copyErrorButton: Button
+    private var errorLogVisible = false
 
     // ------------------------------------------------------------------------
     // ExoPlayer
     // ------------------------------------------------------------------------
     private var exoPlayer: ExoPlayer? = null
     private var isPlaying = false
-    private var videoFile: File? = null
+    private var videoUri: Uri? = null
 
     // ------------------------------------------------------------------------
     // FFmpeg native methods
@@ -57,6 +65,7 @@ class PlayerActivity : AppCompatActivity() {
             System.loadLibrary("ffmpeg_wrapper")
         } catch (e: UnsatisfiedLinkError) {
             e.printStackTrace()
+            logError("Failed to load native library: ${e.message}")
         }
     }
 
@@ -83,6 +92,7 @@ class PlayerActivity : AppCompatActivity() {
     // Permission request code
     private companion object {
         private const val PERMISSION_REQUEST_READ_STORAGE = 100
+        private const val TAG = "RTFP"
     }
 
     // ------------------------------------------------------------------------
@@ -99,6 +109,7 @@ class PlayerActivity : AppCompatActivity() {
             setBackgroundColor(Color.BLACK)
         }
 
+        // SurfaceView for video
         surfaceView = SurfaceView(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -107,6 +118,7 @@ class PlayerActivity : AppCompatActivity() {
         }
         root.addView(surfaceView)
 
+        // Debug overlay (current time during seek)
         debugOverlay = TextView(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -121,10 +133,49 @@ class PlayerActivity : AppCompatActivity() {
         }
         root.addView(debugOverlay)
 
+        // Error log view (initially hidden)
+        errorLogText = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 12f
+        }
+        copyErrorButton = Button(this).apply {
+            text = "Copy Log"
+            setOnClickListener {
+                val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                val clip = android.content.ClipData.newPlainText("RTFP Error Log", errorLogText.text)
+                clipboard.setPrimaryClip(clip)
+                Toast.makeText(this@PlayerActivity, "Log copied", Toast.LENGTH_SHORT).show()
+            }
+        }
+        val errorContent = FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            addView(errorLogText)
+            addView(copyErrorButton)
+        }
+        errorLogView = ScrollView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                400
+            ).apply {
+                gravity = android.view.Gravity.BOTTOM
+                bottomMargin = 0
+            }
+            setBackgroundColor(Color.argb(200, 0, 0, 0))
+            addView(errorContent)
+            visibility = View.GONE
+        }
+        root.addView(errorLogView)
+
         setContentView(root)
 
         setupExoPlayer()
         setupTouchListeners()
+
+        // Request storage permission on first launch (so it appears in settings)
+        requestStoragePermissionIfNeeded()
 
         // Handle incoming intent
         handleIntent(intent)
@@ -145,43 +196,22 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     // ------------------------------------------------------------------------
-    // Intent handling
+    // Permission handling
     // ------------------------------------------------------------------------
-    private fun handleIntent(intent: Intent) {
-        when (intent.action) {
-            Intent.ACTION_VIEW -> {
-                val uri = intent.data ?: return
-                // For content:// URIs, we don't need any permission (temporary grant)
-                if (uri.scheme == ContentResolver.SCHEME_CONTENT) {
-                    openVideoFromContentUri(uri)
-                } else if (uri.scheme == ContentResolver.SCHEME_FILE) {
-                    // For file:// URIs, we may need permission on older Androids
-                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-                        // Only below Android 10 we need to request permission
-                        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
-                            != PackageManager.PERMISSION_GRANTED
-                        ) {
-                            // Save URI and request permission
-                            pendingFileUri = uri
-                            ActivityCompat.requestPermissions(
-                                this,
-                                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE),
-                                PERMISSION_REQUEST_READ_STORAGE
-                            )
-                        } else {
-                            openVideoFromFileUri(uri)
-                        }
-                    } else {
-                        // On Android 10+, file:// URIs are not allowed; but if we get one,
-                        // we can still try to open it (maybe it's from external storage?)
-                        openVideoFromFileUri(uri)
-                    }
-                }
+    private fun requestStoragePermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            // Only below Android 10 we need to request permission
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE),
+                    PERMISSION_REQUEST_READ_STORAGE
+                )
             }
         }
     }
-
-    private var pendingFileUri: Uri? = null
 
     override fun onRequestPermissionsResult(
         requestCode: Int,
@@ -192,51 +222,75 @@ class PlayerActivity : AppCompatActivity() {
         when (requestCode) {
             PERMISSION_REQUEST_READ_STORAGE -> {
                 if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    pendingFileUri?.let { openVideoFromFileUri(it) }
+                    logError("Storage permission granted")
                 } else {
+                    logError("Storage permission denied")
                     Toast.makeText(this, "Storage permission denied", Toast.LENGTH_SHORT).show()
                 }
-                pendingFileUri = null
             }
         }
     }
 
-    // For content:// URIs – no permission needed, just copy to cache
-    private fun openVideoFromContentUri(uri: Uri) {
-        val file = copyContentUriToCache(uri)
-        if (file != null) {
-            openVideoFile(file)
-        } else {
-            Toast.makeText(this, "Cannot open video", Toast.LENGTH_SHORT).show()
+    // ------------------------------------------------------------------------
+    // Intent handling
+    // ------------------------------------------------------------------------
+    private fun handleIntent(intent: Intent) {
+        when (intent.action) {
+            Intent.ACTION_VIEW -> {
+                val uri = intent.data ?: return
+                logError("Opening URI: $uri")
+                openVideo(uri)
+            }
         }
     }
 
-    // For file:// URIs – try to open directly
-    private fun openVideoFromFileUri(uri: Uri) {
-        val file = File(uri.path!!)
-        if (file.exists()) {
-            openVideoFile(file)
+    private fun openVideo(uri: Uri) {
+        videoUri = uri
+        // For content:// URIs, ExoPlayer can handle them directly
+        // For file:// URIs, convert to Uri.fromFile if needed, but MediaItem.fromUri works with file:// too
+        val mediaItem = MediaItem.fromUri(uri)
+        exoPlayer?.setMediaItem(mediaItem)
+        exoPlayer?.prepare()
+        exoPlayer?.playWhenReady = true
+        isPlaying = true
+
+        // For FFmpeg seeking, we need a file path. If it's a content URI, we may need to copy to cache.
+        // But let's try to get a file path from content URI via content resolver (may work if it's a media store file)
+        val file = uriToFile(uri)
+        if (file != null && file.exists()) {
+            if (ffmpegHandle != 0L) nativeClose(ffmpegHandle)
+            ffmpegHandle = nativeOpenFile(file.absolutePath)
         } else {
-            Toast.makeText(this, "File not found", Toast.LENGTH_SHORT).show()
+            logError("Cannot get file for FFmpeg seeking; seeking will be disabled")
         }
     }
 
-    // Copy content URI to cache and return a File
-    private fun copyContentUriToCache(uri: Uri): File? {
-        val cursor = contentResolver.query(uri, null, null, null, null)
-        cursor?.use {
-            if (it.moveToFirst()) {
-                val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                val name = it.getString(nameIndex)
-                val inputStream = contentResolver.openInputStream(uri) ?: return null
-                val outFile = File(cacheDir, name)
-                FileOutputStream(outFile).use { output ->
-                    inputStream.copyTo(output)
+    // Convert Uri to File if possible (for content URIs, try to get real path; fallback to copy to cache)
+    private fun uriToFile(uri: Uri): File? {
+        return when (uri.scheme) {
+            ContentResolver.SCHEME_FILE -> File(uri.path!!)
+            ContentResolver.SCHEME_CONTENT -> {
+                // Try to get a file path via content resolver (may work for media store)
+                val projection = arrayOf(OpenableColumns.DISPLAY_NAME)
+                val cursor = contentResolver.query(uri, projection, null, null, null)
+                cursor?.use {
+                    if (it.moveToFirst()) {
+                        val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        val name = it.getString(nameIndex)
+                        // Attempt to get path (not reliable)
+                        // Fallback: copy to cache
+                        val inputStream = contentResolver.openInputStream(uri) ?: return null
+                        val outFile = File(cacheDir, name)
+                        FileOutputStream(outFile).use { output ->
+                            inputStream.copyTo(output)
+                        }
+                        return outFile
+                    }
                 }
-                return outFile
+                null
             }
+            else -> null
         }
-        return null
     }
 
     // ------------------------------------------------------------------------
@@ -260,27 +314,16 @@ class PlayerActivity : AppCompatActivity() {
             })
 
             addListener(object : Player.Listener {
-                override fun onPlaybackStateChanged(playbackState: Int) { }
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    logError("Playback state changed: $playbackState")
+                }
                 override fun onPlayerError(error: PlaybackException) {
                     error.printStackTrace()
+                    logError("ExoPlayer error: ${error.message}")
                     Toast.makeText(this@PlayerActivity, "Playback error", Toast.LENGTH_SHORT).show()
                 }
             })
         }
-    }
-
-    fun openVideoFile(file: File) {
-        videoFile = file
-        val mediaItem = MediaItem.fromUri(Uri.fromFile(file))
-        exoPlayer?.setMediaItem(mediaItem)
-        exoPlayer?.prepare()
-        exoPlayer?.playWhenReady = true   // start playing immediately
-        isPlaying = true
-
-        if (ffmpegHandle != 0L) nativeClose(ffmpegHandle)
-        ffmpegHandle = nativeOpenFile(file.absolutePath)
-
-        Toast.makeText(this, "Playing: ${file.name}", Toast.LENGTH_SHORT).show()
     }
 
     // ------------------------------------------------------------------------
@@ -290,6 +333,11 @@ class PlayerActivity : AppCompatActivity() {
         surfaceView.setOnTouchListener { v, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    // Long press on top-left corner to show error log
+                    if (event.x < 200 && event.y < 200) {
+                        toggleErrorLog()
+                        return@setOnTouchListener true
+                    }
                     longPressRunnable?.let { mainHandler.removeCallbacks(it) }
                     longPressRunnable = Runnable {
                         if (!isDragging) {
@@ -370,7 +418,7 @@ class PlayerActivity : AppCompatActivity() {
     // FFmpeg seek mode
     // ------------------------------------------------------------------------
     private fun startFfmpegSeekMode() {
-        if (ffmpegHandle == 0L || videoFile == null) return
+        if (ffmpegHandle == 0L || videoUri == null) return
         exoPlayer?.pause()
         isFfmpegMode = true
         debugOverlay.visibility = View.VISIBLE
@@ -386,6 +434,8 @@ class PlayerActivity : AppCompatActivity() {
                 drawBitmapOnSurface(it)
                 it.recycle()
             }
+        } else {
+            logError("FFmpeg seek failed at $timestampUs")
         }
     }
 
@@ -409,5 +459,29 @@ class PlayerActivity : AppCompatActivity() {
         val minutes = sec / 60
         val seconds = sec % 60
         debugOverlay.text = String.format("%02d:%02d", minutes, seconds)
+    }
+
+    // ------------------------------------------------------------------------
+    // Error log view
+    // ------------------------------------------------------------------------
+    private fun toggleErrorLog() {
+        errorLogVisible = !errorLogVisible
+        errorLogView.visibility = if (errorLogVisible) View.VISIBLE else View.GONE
+    }
+
+    private fun logError(message: String) {
+        Log.e(TAG, message)
+        mainHandler.post {
+            errorLogText.append("${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())}: $message\n")
+            // Auto-scroll to bottom
+            errorLogView.post { errorLogView.fullScroll(ScrollView.FOCUS_DOWN) }
+        }
+    }
+
+    private fun logError(throwable: Throwable) {
+        val sw = StringWriter()
+        val pw = PrintWriter(sw)
+        throwable.printStackTrace(pw)
+        logError(sw.toString())
     }
 }
