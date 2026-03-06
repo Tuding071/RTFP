@@ -3,6 +3,7 @@ package com.rtfp
 
 import android.Manifest
 import android.content.ContentResolver
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -34,13 +35,16 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
+import java.io.FileReader
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 
 class PlayerActivity : AppCompatActivity() {
 
@@ -52,7 +56,15 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var errorLogView: ScrollView
     private lateinit var errorLogText: TextView
     private lateinit var copyErrorButton: Button
+    private lateinit var clearLogButton: Button
     private var errorLogVisible = false
+
+    // ------------------------------------------------------------------------
+    // File logging
+    // ------------------------------------------------------------------------
+    private lateinit var logFile: File
+    private val logLock = Any()
+    private val isLoggingEnabled = AtomicBoolean(true)
 
     // ------------------------------------------------------------------------
     // ExoPlayer
@@ -60,6 +72,7 @@ class PlayerActivity : AppCompatActivity() {
     private var exoPlayer: ExoPlayer? = null
     private var isPlaying = false
     private var videoUri: Uri? = null
+    private var nativeLibraryLoaded = false
 
     // ------------------------------------------------------------------------
     // FFmpeg native methods
@@ -67,9 +80,11 @@ class PlayerActivity : AppCompatActivity() {
     init {
         try {
             System.loadLibrary("ffmpeg_wrapper")
+            nativeLibraryLoaded = true
+            logToFile("Native library loaded successfully")
         } catch (e: UnsatisfiedLinkError) {
+            logToFile("Failed to load native library: ${e.message}")
             e.printStackTrace()
-            logError("Failed to load native library: ${e.message}")
         }
     }
 
@@ -97,41 +112,42 @@ class PlayerActivity : AppCompatActivity() {
     private companion object {
         private const val PERMISSION_REQUEST_READ_STORAGE = 100
         private const val TAG = "RTFP"
+        private const val LOG_FILE_NAME = "rtfp_crash_log.txt"
     }
 
     // ------------------------------------------------------------------------
     // Activity lifecycle
     // ------------------------------------------------------------------------
     override fun onCreate(savedInstanceState: Bundle?) {
-        // Set default exception handler before anything else
+        // Initialize file logging as early as possible
+        logFile = File(cacheDir, LOG_FILE_NAME)
+
+        // Set custom uncaught exception handler to catch crashes
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            // Log to our error view if possible (but at this point the app is crashing)
-            // We'll try to show a toast and save to log
+            // Log to file first
+            logToFile("*** CRASH *** Thread: ${thread.name}")
+            logToFile(throwable)
+            // Also try to show on screen if possible (but app is crashing)
             runOnUiThread {
                 try {
                     if (::errorLogText.isInitialized) {
-                        logError("CRASH: ${throwable.message}")
-                        logError(throwable)
+                        appendToErrorLogView("*** CRASH *** ${throwable.message}")
                         errorLogVisible = true
                         errorLogView.visibility = View.VISIBLE
-                    } else {
-                        // Fallback: show a simple dialog? Can't because activity may be gone
-                        Toast.makeText(this, "Fatal error: ${throwable.message}", Toast.LENGTH_LONG).show()
                     }
                 } catch (e: Exception) {
                     // Ignore
                 }
             }
-            // Let the default handler also handle it (so the app still crashes)
+            // Let default handler terminate the app
             defaultHandler?.uncaughtException(thread, throwable)
         }
 
-        // Wrap entire onCreate in try-catch to show any initialization errors
         try {
             super.onCreate(savedInstanceState)
 
-            // Create UI first (so error log is available early)
+            // Create UI
             val root = FrameLayout(this).apply {
                 layoutParams = ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -140,7 +156,6 @@ class PlayerActivity : AppCompatActivity() {
                 setBackgroundColor(Color.BLACK)
             }
 
-            // SurfaceView for video
             surfaceView = SurfaceView(this).apply {
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -149,7 +164,6 @@ class PlayerActivity : AppCompatActivity() {
             }
             root.addView(surfaceView)
 
-            // Debug overlay (current time during seek)
             debugOverlay = TextView(this).apply {
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -164,7 +178,7 @@ class PlayerActivity : AppCompatActivity() {
             }
             root.addView(debugOverlay)
 
-            // Error log view (initially hidden)
+            // Error log view
             errorLogText = TextView(this).apply {
                 setTextColor(Color.WHITE)
                 textSize = 12f
@@ -178,21 +192,44 @@ class PlayerActivity : AppCompatActivity() {
                     Toast.makeText(this@PlayerActivity, "Log copied", Toast.LENGTH_SHORT).show()
                 }
             }
+            clearLogButton = Button(this).apply {
+                text = "Clear Log"
+                setOnClickListener {
+                    clearLogFile()
+                    errorLogText.text = ""
+                    Toast.makeText(this@PlayerActivity, "Log cleared", Toast.LENGTH_SHORT).show()
+                }
+            }
+            val buttonBar = FrameLayout(this).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+                copyErrorButton.layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { gravity = android.view.Gravity.START }
+                clearLogButton.layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { gravity = android.view.Gravity.END }
+                addView(copyErrorButton)
+                addView(clearLogButton)
+            }
             val errorContent = FrameLayout(this).apply {
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 )
                 addView(errorLogText)
-                addView(copyErrorButton)
+                addView(buttonBar)
             }
             errorLogView = ScrollView(this).apply {
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
-                    400
+                    500
                 ).apply {
                     gravity = android.view.Gravity.BOTTOM
-                    bottomMargin = 0
                 }
                 setBackgroundColor(Color.argb(200, 0, 0, 0))
                 addView(errorContent)
@@ -202,24 +239,24 @@ class PlayerActivity : AppCompatActivity() {
 
             setContentView(root)
 
+            // Load previous logs from file and display
+            loadPreviousLogs()
+
             setupExoPlayer()
             setupTouchListeners()
 
-            // Request storage permission on first launch (so it appears in settings)
             requestStoragePermissionIfNeeded()
-
-            // Handle incoming intent
             handleIntent(intent)
         } catch (e: Exception) {
-            e.printStackTrace()
-            // Show error on a simple TextView if log view isn't ready
+            logToFile("Exception in onCreate: ${e.message}")
+            logToFile(e)
+            // Show error on screen
             if (::errorLogText.isInitialized) {
-                logError("Fatal error during onCreate:")
-                logError(e)
+                appendToErrorLogView("FATAL: ${e.message}")
                 errorLogVisible = true
                 errorLogView.visibility = View.VISIBLE
             } else {
-                // Fallback: show a basic TextView with error
+                // Fallback
                 val tv = TextView(this)
                 tv.setTextColor(Color.RED)
                 tv.text = "FATAL ERROR: ${e.message}\n${e.stackTraceToString()}"
@@ -243,11 +280,76 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     // ------------------------------------------------------------------------
+    // File logging methods
+    // ------------------------------------------------------------------------
+    private fun logToFile(message: String) {
+        if (!isLoggingEnabled.get()) return
+        synchronized(logLock) {
+            try {
+                logFile.appendText("${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())}: $message\n")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to write log", e)
+            }
+        }
+        // Also log to Logcat
+        Log.d(TAG, message)
+        // Update UI if available
+        if (::errorLogText.isInitialized) {
+            mainHandler.post {
+                appendToErrorLogView(message)
+            }
+        }
+    }
+
+    private fun logToFile(throwable: Throwable) {
+        val sw = StringWriter()
+        val pw = PrintWriter(sw)
+        throwable.printStackTrace(pw)
+        logToFile(sw.toString())
+    }
+
+    private fun appendToErrorLogView(message: String) {
+        val time = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+        errorLogText.append("$time: $message\n")
+        // Auto-scroll to bottom
+        errorLogView.post { errorLogView.fullScroll(ScrollView.FOCUS_DOWN) }
+    }
+
+    private fun loadPreviousLogs() {
+        try {
+            if (logFile.exists()) {
+                BufferedReader(FileReader(logFile)).use { reader ->
+                    reader.forEachLine { line ->
+                        appendToErrorLogView(line)
+                    }
+                }
+                appendToErrorLogView("--- End of previous log ---")
+            } else {
+                appendToErrorLogView("No previous crash log.")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load previous logs", e)
+        }
+    }
+
+    private fun clearLogFile() {
+        synchronized(logLock) {
+            try {
+                if (logFile.exists()) {
+                    logFile.delete()
+                }
+                logFile.createNewFile()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to clear log file", e)
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------
     // Permission handling
     // ------------------------------------------------------------------------
     private fun requestStoragePermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            // Only below Android 10 we need to request permission
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
                 != PackageManager.PERMISSION_GRANTED
             ) {
@@ -269,9 +371,9 @@ class PlayerActivity : AppCompatActivity() {
         when (requestCode) {
             PERMISSION_REQUEST_READ_STORAGE -> {
                 if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    logError("Storage permission granted")
+                    logToFile("Storage permission granted")
                 } else {
-                    logError("Storage permission denied")
+                    logToFile("Storage permission denied")
                     Toast.makeText(this, "Storage permission denied", Toast.LENGTH_SHORT).show()
                 }
             }
@@ -285,7 +387,7 @@ class PlayerActivity : AppCompatActivity() {
         when (intent.action) {
             Intent.ACTION_VIEW -> {
                 val uri = intent.data ?: return
-                logError("Opening URI: $uri")
+                logToFile("Opening URI: $uri")
                 openVideo(uri)
             }
         }
@@ -293,46 +395,65 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun openVideo(uri: Uri) {
         videoUri = uri
-        // For content:// URIs, ExoPlayer can handle them directly
-        // For file:// URIs, convert to Uri.fromFile if needed, but MediaItem.fromUri works with file:// too
+        // Check if we have a surface ready
+        if (!surfaceView.holder.surface.isValid) {
+            logToFile("Surface not ready yet, waiting...")
+            // We'll rely on surface callback to set media item later? Actually ExoPlayer handles surface later.
+        }
         val mediaItem = MediaItem.fromUri(uri)
         exoPlayer?.setMediaItem(mediaItem)
         exoPlayer?.prepare()
         exoPlayer?.playWhenReady = true
         isPlaying = true
+        logToFile("ExoPlayer prepared and set to play")
 
-        // For FFmpeg seeking, we need a file path. If it's a content URI, we may need to copy to cache.
-        // But let's try to get a file path from content URI via content resolver (may work if it's a media store file)
-        val file = uriToFile(uri)
-        if (file != null && file.exists()) {
-            if (ffmpegHandle != 0L) nativeClose(ffmpegHandle)
-            ffmpegHandle = nativeOpenFile(file.absolutePath)
+        // Try to get a file for FFmpeg seeking
+        if (nativeLibraryLoaded) {
+            try {
+                val file = uriToFile(uri)
+                if (file != null && file.exists()) {
+                    logToFile("Opening file for FFmpeg: ${file.absolutePath}")
+                    if (ffmpegHandle != 0L) nativeClose(ffmpegHandle)
+                    ffmpegHandle = nativeOpenFile(file.absolutePath)
+                    if (ffmpegHandle == 0L) {
+                        logToFile("nativeOpenFile returned 0 (failure)")
+                    } else {
+                        logToFile("FFmpeg handle: $ffmpegHandle")
+                    }
+                } else {
+                    logToFile("Cannot get local file for FFmpeg seeking")
+                }
+            } catch (e: Exception) {
+                logToFile("Exception in FFmpeg setup: ${e.message}")
+                logToFile(e)
+            }
         } else {
-            logError("Cannot get file for FFmpeg seeking; seeking will be disabled")
+            logToFile("Native library not loaded, FFmpeg seeking disabled")
         }
     }
 
-    // Convert Uri to File if possible (for content URIs, try to get real path; fallback to copy to cache)
     private fun uriToFile(uri: Uri): File? {
         return when (uri.scheme) {
             ContentResolver.SCHEME_FILE -> File(uri.path!!)
             ContentResolver.SCHEME_CONTENT -> {
-                // Try to get a file path via content resolver (may work for media store)
-                val projection = arrayOf(OpenableColumns.DISPLAY_NAME)
-                val cursor = contentResolver.query(uri, projection, null, null, null)
-                cursor?.use {
-                    if (it.moveToFirst()) {
-                        val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                        val name = it.getString(nameIndex)
-                        // Attempt to get path (not reliable)
-                        // Fallback: copy to cache
-                        val inputStream = contentResolver.openInputStream(uri) ?: return null
-                        val outFile = File(cacheDir, name)
-                        FileOutputStream(outFile).use { output ->
-                            inputStream.copyTo(output)
+                try {
+                    val projection = arrayOf(OpenableColumns.DISPLAY_NAME)
+                    val cursor = contentResolver.query(uri, projection, null, null, null)
+                    cursor?.use {
+                        if (it.moveToFirst()) {
+                            val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                            val name = it.getString(nameIndex)
+                            val inputStream = contentResolver.openInputStream(uri) ?: return null
+                            val outFile = File(cacheDir, "video_$name")
+                            FileOutputStream(outFile).use { output ->
+                                inputStream.copyTo(output)
+                            }
+                            logToFile("Copied content URI to cache: ${outFile.absolutePath}")
+                            return outFile
                         }
-                        return outFile
                     }
+                } catch (e: Exception) {
+                    logToFile("Failed to copy content URI: ${e.message}")
                 }
                 null
             }
@@ -347,6 +468,7 @@ class PlayerActivity : AppCompatActivity() {
         exoPlayer = ExoPlayer.Builder(this).build().apply {
             surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
                 override fun surfaceCreated(holder: SurfaceHolder) {
+                    logToFile("Surface created")
                     setVideoSurface(holder.surface)
                 }
                 override fun surfaceChanged(
@@ -354,19 +476,22 @@ class PlayerActivity : AppCompatActivity() {
                     format: Int,
                     width: Int,
                     height: Int
-                ) = Unit
+                ) {
+                    logToFile("Surface changed: ${width}x$height")
+                }
                 override fun surfaceDestroyed(holder: SurfaceHolder) {
+                    logToFile("Surface destroyed")
                     clearVideoSurface()
                 }
             })
 
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
-                    logError("Playback state changed: $playbackState")
+                    logToFile("Playback state: $playbackState")
                 }
                 override fun onPlayerError(error: PlaybackException) {
-                    error.printStackTrace()
-                    logError("ExoPlayer error: ${error.message}")
+                    logToFile("ExoPlayer error: ${error.message}")
+                    logToFile(error)
                     Toast.makeText(this@PlayerActivity, "Playback error", Toast.LENGTH_SHORT).show()
                 }
             })
@@ -380,7 +505,6 @@ class PlayerActivity : AppCompatActivity() {
         surfaceView.setOnTouchListener { v, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    // Long press on top-left corner to show error log
                     if (event.x < 200 && event.y < 200) {
                         toggleErrorLog()
                         return@setOnTouchListener true
@@ -390,6 +514,7 @@ class PlayerActivity : AppCompatActivity() {
                         if (!isDragging) {
                             isLongPressing = true
                             exoPlayer?.setPlaybackSpeed(2.0f)
+                            logToFile("Long press: 2x speed")
                         }
                     }
                     mainHandler.postDelayed(longPressRunnable!!, 500)
@@ -427,6 +552,7 @@ class PlayerActivity : AppCompatActivity() {
                     if (isLongPressing) {
                         isLongPressing = false
                         exoPlayer?.setPlaybackSpeed(1.0f)
+                        logToFile("Long press released: normal speed")
                     }
 
                     if (isDragging) {
@@ -434,6 +560,7 @@ class PlayerActivity : AppCompatActivity() {
                         debugOverlay.visibility = View.GONE
                         exitFfmpegSeekMode()
                         exoPlayer?.seekTo(currentDragPositionMs)
+                        logToFile("Seek ended at ${currentDragPositionMs}ms")
                         if (isPlaying) {
                             exoPlayer?.play()
                         }
@@ -454,9 +581,11 @@ class PlayerActivity : AppCompatActivity() {
             if (it.isPlaying) {
                 it.pause()
                 isPlaying = false
+                logToFile("Paused")
             } else {
                 it.play()
                 isPlaying = true
+                logToFile("Play")
             }
         }
     }
@@ -465,35 +594,54 @@ class PlayerActivity : AppCompatActivity() {
     // FFmpeg seek mode
     // ------------------------------------------------------------------------
     private fun startFfmpegSeekMode() {
-        if (ffmpegHandle == 0L || videoUri == null) return
+        if (!nativeLibraryLoaded) {
+            logToFile("FFmpeg seek disabled: native library not loaded")
+            return
+        }
+        if (ffmpegHandle == 0L) {
+            logToFile("FFmpeg seek disabled: handle is 0")
+            return
+        }
         exoPlayer?.pause()
         isFfmpegMode = true
         debugOverlay.visibility = View.VISIBLE
         updateFfmpegFrame(exoPlayer?.currentPosition?.times(1000) ?: 0)
+        logToFile("FFmpeg seek mode started")
     }
 
     private fun updateFfmpegFrame(timestampUs: Long) {
         if (!isFfmpegMode || ffmpegHandle == 0L) return
-        val result = nativeSeekTo(ffmpegHandle, timestampUs)
-        if (result == 0) {
-            val bitmap = nativeGetFrameAsBitmap(ffmpegHandle)
-            bitmap?.let {
-                drawBitmapOnSurface(it)
-                it.recycle()
+        try {
+            val result = nativeSeekTo(ffmpegHandle, timestampUs)
+            if (result == 0) {
+                val bitmap = nativeGetFrameAsBitmap(ffmpegHandle)
+                if (bitmap != null) {
+                    drawBitmapOnSurface(bitmap)
+                    bitmap.recycle()
+                } else {
+                    logToFile("nativeGetFrameAsBitmap returned null")
+                }
+            } else {
+                logToFile("nativeSeekTo failed with code $result at $timestampUs")
             }
-        } else {
-            logError("FFmpeg seek failed at $timestampUs")
+        } catch (e: Exception) {
+            logToFile("Exception in updateFfmpegFrame: ${e.message}")
+            logToFile(e)
         }
     }
 
     private fun drawBitmapOnSurface(bitmap: Bitmap) {
         val surface = surfaceView.holder.surface ?: return
-        val canvas: Canvas? = surface.lockCanvas(null)
-        canvas?.apply {
-            val rect = android.graphics.Rect(0, 0, width, height)
-            val paint = Paint().apply { isFilterBitmap = true }
-            drawBitmap(bitmap, null, rect, paint)
-            surface.unlockCanvasAndPost(this)
+        try {
+            val canvas: Canvas? = surface.lockCanvas(null)
+            canvas?.apply {
+                val rect = android.graphics.Rect(0, 0, width, height)
+                val paint = Paint().apply { isFilterBitmap = true }
+                drawBitmap(bitmap, null, rect, paint)
+                surface.unlockCanvasAndPost(this)
+            }
+        } catch (e: Exception) {
+            logToFile("Failed to draw bitmap: ${e.message}")
         }
     }
 
@@ -508,30 +656,13 @@ class PlayerActivity : AppCompatActivity() {
         debugOverlay.text = String.format("%02d:%02d", minutes, seconds)
     }
 
-    // ------------------------------------------------------------------------
-    // Error log view
-    // ------------------------------------------------------------------------
     private fun toggleErrorLog() {
         errorLogVisible = !errorLogVisible
         errorLogView.visibility = if (errorLogVisible) View.VISIBLE else View.GONE
-    }
-
-    private fun logError(message: String) {
-        Log.e(TAG, message)
-        if (::errorLogText.isInitialized) {
-            mainHandler.post {
-                val time = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-                errorLogText.append("$time: $message\n")
-                // Auto-scroll to bottom
-                errorLogView.post { errorLogView.fullScroll(ScrollView.FOCUS_DOWN) }
-            }
+        if (errorLogVisible) {
+            // Refresh with latest logs from file (in case new logs were added after UI load)
+            errorLogText.text = ""
+            loadPreviousLogs()
         }
-    }
-
-    private fun logError(throwable: Throwable) {
-        val sw = StringWriter()
-        val pw = PrintWriter(sw)
-        throwable.printStackTrace(pw)
-        logError(sw.toString())
     }
 }
