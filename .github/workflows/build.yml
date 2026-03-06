@@ -65,7 +65,7 @@ jobs:
           include(":app")
           EOF
 
-          # Generate app/build.gradle.kts
+          # Generate app/build.gradle.kts with version codes
           cat > app/build.gradle.kts << EOF
           plugins {
               id("com.android.application")
@@ -77,6 +77,8 @@ jobs:
               defaultConfig {
                   minSdk = 21
                   targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
               }
               compileOptions {
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -98,10 +100,11 @@ jobs:
           }
           EOF
 
-          # Generate AndroidManifest.xml
+          # Generate AndroidManifest.xml with proper namespace
           cat > app/src/main/AndroidManifest.xml << EOF
           <?xml version="1.0" encoding="utf-8"?>
-          <manifest package="com.rtfp">
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.rtfp">
             <uses-permission android:name="android.permission.INTERNET" />
             <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
             <application android:label="RTFP" android:theme="@style/Theme.AppCompat">
