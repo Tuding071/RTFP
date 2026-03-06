@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -46,20 +47,12 @@ class PlayerActivity : AppCompatActivity() {
             System.loadLibrary("ffmpeg_wrapper")
         } catch (e: UnsatisfiedLinkError) {
             e.printStackTrace()
-            // Fallback: perhaps show an error toast
         }
     }
 
-    /** Open video file and return a handle (0 on error). */
     private external fun nativeOpenFile(path: String): Long
-
-    /** Seek to timestamp (microseconds) and decode a frame. Returns 0 on success. */
     private external fun nativeSeekTo(handle: Long, timestampUs: Long): Int
-
-    /** Get the last decoded frame as a Bitmap (must be recycled by caller). */
     private external fun nativeGetFrameAsBitmap(handle: Long): Bitmap?
-
-    /** Close the video and release resources. */
     private external fun nativeClose(handle: Long)
 
     private var ffmpegHandle: Long = 0
@@ -159,7 +152,8 @@ class PlayerActivity : AppCompatActivity() {
 
     fun openVideoFile(file: File) {
         videoFile = file
-        val mediaItem = MediaItem.fromUri(file.toURI())
+        // FIX: use Uri.fromFile(file) instead of file.toURI()
+        val mediaItem = MediaItem.fromUri(Uri.fromFile(file))
         exoPlayer?.setMediaItem(mediaItem)
         exoPlayer?.prepare()
         exoPlayer?.playWhenReady = false
