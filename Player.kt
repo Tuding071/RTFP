@@ -20,6 +20,7 @@ import android.os.Looper
 import android.provider.OpenableColumns
 import android.util.AttributeSet
 import android.util.Log
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -51,7 +52,7 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * A SurfaceView that maintains aspect ratio of video.
+ * A SurfaceView that maintains aspect ratio of video and centers itself.
  */
 class AspectRatioSurfaceView @JvmOverloads constructor(
     context: Context,
@@ -205,11 +206,12 @@ class PlayerActivity : AppCompatActivity() {
                 setBackgroundColor(Color.BLACK)
             }
 
+            // SurfaceView for video – WRAP_CONTENT + CENTER to keep aspect ratio and center
             surfaceView = AspectRatioSurfaceView(this).apply {
                 layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { gravity = Gravity.CENTER }
             }
             root.addView(surfaceView)
 
@@ -218,7 +220,7 @@ class PlayerActivity : AppCompatActivity() {
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply {
-                    gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
+                    gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
                     topMargin = 50
                 }
                 setTextColor(Color.WHITE)
@@ -257,11 +259,11 @@ class PlayerActivity : AppCompatActivity() {
                 copyErrorButton.layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { gravity = android.view.Gravity.START }
+                ).apply { gravity = Gravity.START }
                 clearLogButton.layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { gravity = android.view.Gravity.END }
+                ).apply { gravity = Gravity.END }
                 addView(copyErrorButton)
                 addView(clearLogButton)
             }
@@ -278,7 +280,7 @@ class PlayerActivity : AppCompatActivity() {
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     500
                 ).apply {
-                    gravity = android.view.Gravity.BOTTOM
+                    gravity = Gravity.BOTTOM
                 }
                 setBackgroundColor(Color.argb(200, 0, 0, 0))
                 addView(errorContent)
