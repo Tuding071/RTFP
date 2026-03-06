@@ -25,22 +25,22 @@ jobs:
 
       - name: Generate Android project structure
         run: |
-          # Create root project directories
+          # Create directories
           mkdir -p app/src/main/java/com/rtfp
           mkdir -p app/src/main/res/values
           mkdir -p app/src/main/jniLibs/arm64-v8a
 
-          # Copy Player.kt to source
+          # Copy Player.kt
           cp Player.kt app/src/main/java/com/rtfp/
 
-          # Generate gradle.properties (enable AndroidX)
+          # gradle.properties
           cat > gradle.properties << EOF
           android.useAndroidX=true
           android.enableJetifier=true
           org.gradle.jvmargs=-Xmx2048m
           EOF
 
-          # Generate root build.gradle.kts
+          # root build.gradle.kts
           cat > build.gradle.kts << EOF
           buildscript {
               repositories {
@@ -60,12 +60,12 @@ jobs:
           }
           EOF
 
-          # Generate settings.gradle.kts
+          # settings.gradle.kts
           cat > settings.gradle.kts << EOF
           include(":app")
           EOF
 
-          # Generate app/build.gradle.kts with version codes
+          # app/build.gradle.kts
           cat > app/build.gradle.kts << EOF
           plugins {
               id("com.android.application")
@@ -100,8 +100,8 @@ jobs:
           }
           EOF
 
-          # Generate AndroidManifest.xml (remove package attribute)
-          cat > app/src/main/AndroidManifest.xml << EOF
+          # AndroidManifest.xml with intent filters
+          cat > app/src/main/AndroidManifest.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
             <uses-permission android:name="android.permission.INTERNET" />
@@ -112,20 +112,50 @@ jobs:
                   <action android:name="android.intent.action.MAIN" />
                   <category android:name="android.intent.category.LAUNCHER" />
                 </intent-filter>
+                <intent-filter>
+                  <action android:name="android.intent.action.VIEW" />
+                  <category android:name="android.intent.category.DEFAULT" />
+                  <data android:scheme="file" />
+                  <data android:mimeType="video/*" />
+                  <data android:scheme="content" />
+                  <data android:mimeType="video/*" />
+                </intent-filter>
+                <intent-filter>
+                  <action android:name="android.intent.action.VIEW" />
+                  <category android:name="android.intent.category.DEFAULT" />
+                  <data android:scheme="file" />
+                  <data android:host="*" />
+                  <data android:pathPattern=".*\\.mp4" />
+                  <data android:pathPattern=".*\\.mkv" />
+                  <data android:pathPattern=".*\\.avi" />
+                  <data android:pathPattern=".*\\.mov" />
+                  <data android:pathPattern=".*\\.3gp" />
+                  <data android:pathPattern=".*\\.webm" />
+                  <data android:pathPattern=".*\\.ts" />
+                  <data android:pathPattern=".*\\.m4v" />
+                </intent-filter>
               </activity>
             </application>
           </manifest>
           EOF
 
-      - name: Download FFmpeg source
+      - name: Cache FFmpeg build
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: ffmpeg_src/install
+          key: ${{ runner.os }}-ffmpeg-6.0-arm64-v8a
+
+      - name: Download FFmpeg source (if not cached)
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
         run: |
           wget https://ffmpeg.org/releases/ffmpeg-6.0.tar.xz
           tar -xf ffmpeg-6.0.tar.xz
           mv ffmpeg-6.0 ffmpeg_src
 
-      - name: Build FFmpeg for arm64-v8a
+      - name: Build FFmpeg for arm64-v8a (if not cached)
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
         run: |
-          # Locate NDK (use the first installed version)
           export NDK_DIR=$(ls -d $ANDROID_HOME/ndk/* | head -n1)
           export TOOLCHAIN=$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64
           export ABI="arm64-v8a"
@@ -133,9 +163,6 @@ jobs:
           export API_LEVEL=21
 
           cd ffmpeg_src
-
-          # Test compiler
-          $TOOLCHAIN/bin/${TRIPLE}${API_LEVEL}-clang --version
 
           ./configure \
             --prefix=./install/$ABI \
