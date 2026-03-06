@@ -25,6 +25,7 @@ jobs:
 
       - name: Generate Android project structure
         run: |
+          # Create root project directories
           mkdir -p app/src/main/java/com/rtfp
           mkdir -p app/src/main/res/values
           mkdir -p app/src/main/jniLibs/arm64-v8a
@@ -32,28 +33,36 @@ jobs:
           # Copy Player.kt to source
           cp Player.kt app/src/main/java/com/rtfp/
 
-          # Generate AndroidManifest.xml
-          cat > app/src/main/AndroidManifest.xml << EOF
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest package="com.rtfp">
-            <uses-permission android:name="android.permission.INTERNET" />
-            <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-            <application android:label="RTFP" android:theme="@style/Theme.AppCompat">
-              <activity android:name=".PlayerActivity" android:exported="true">
-                <intent-filter>
-                  <action android:name="android.intent.action.MAIN" />
-                  <category android:name="android.intent.category.LAUNCHER" />
-                </intent-filter>
-              </activity>
-            </application>
-          </manifest>
+          # Generate root build.gradle.kts (project level)
+          cat > build.gradle.kts << EOF
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath("com.android.tools.build:gradle:8.4.0")
+                  classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.23")
+              }
+          }
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
           EOF
 
-          # Generate build.gradle.kts
+          # Generate settings.gradle.kts
+          cat > settings.gradle.kts << EOF
+          include(":app")
+          EOF
+
+          # Generate app/build.gradle.kts
           cat > app/build.gradle.kts << EOF
           plugins {
               id("com.android.application")
-              kotlin("android")
+              id("kotlin-android")
           }
           android {
               namespace = "com.rtfp"
@@ -82,9 +91,21 @@ jobs:
           }
           EOF
 
-          # Generate settings.gradle.kts
-          cat > settings.gradle.kts << EOF
-          include(":app")
+          # Generate AndroidManifest.xml
+          cat > app/src/main/AndroidManifest.xml << EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest package="com.rtfp">
+            <uses-permission android:name="android.permission.INTERNET" />
+            <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+            <application android:label="RTFP" android:theme="@style/Theme.AppCompat">
+              <activity android:name=".PlayerActivity" android:exported="true">
+                <intent-filter>
+                  <action android:name="android.intent.action.MAIN" />
+                  <category android:name="android.intent.category.LAUNCHER" />
+                </intent-filter>
+              </activity>
+            </application>
+          </manifest>
           EOF
 
       - name: Download FFmpeg source
