@@ -104,6 +104,9 @@ jobs:
 
           cd ffmpeg_src
 
+          # Test compiler
+          $TOOLCHAIN/bin/${TRIPLE}${API_LEVEL}-clang --version
+
           ./configure \
             --prefix=./install/$ABI \
             --enable-static \
@@ -140,6 +143,7 @@ jobs:
             --strip=$TOOLCHAIN/bin/llvm-strip \
             --sysroot=$TOOLCHAIN/sysroot \
             --extra-cflags="-fPIC" \
+            --enable-cross-compile \
             --disable-asm
 
           make -j$(nproc)
@@ -149,7 +153,6 @@ jobs:
       - name: Write ffmpeg_wrapper.c
         run: |
           cat > ffmpeg_wrapper.c << 'EOF'
-          // ---------- Full C wrapper code (paste from previous answer) ----------
           #include <jni.h>
           #include <android/bitmap.h>
           #include <libavcodec/avcodec.h>
