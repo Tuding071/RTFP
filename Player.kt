@@ -35,8 +35,12 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import java.io.File
+import java.io.FileOutputStream
 import java.io.PrintWriter
 import java.io.StringWriter
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class PlayerActivity : AppCompatActivity() {
 
@@ -472,7 +476,8 @@ class PlayerActivity : AppCompatActivity() {
     private fun logError(message: String) {
         Log.e(TAG, message)
         mainHandler.post {
-            errorLogText.append("${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())}: $message\n")
+            val time = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+            errorLogText.append("$time: $message\n")
             // Auto-scroll to bottom
             errorLogView.post { errorLogView.fullScroll(ScrollView.FOCUS_DOWN) }
         }
