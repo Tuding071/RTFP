@@ -103,86 +103,129 @@ class PlayerActivity : AppCompatActivity() {
     // Activity lifecycle
     // ------------------------------------------------------------------------
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        val root = FrameLayout(this).apply {
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            setBackgroundColor(Color.BLACK)
-        }
-
-        // SurfaceView for video
-        surfaceView = SurfaceView(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        }
-        root.addView(surfaceView)
-
-        // Debug overlay (current time during seek)
-        debugOverlay = TextView(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
-                topMargin = 50
+        // Set default exception handler before anything else
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            // Log to our error view if possible (but at this point the app is crashing)
+            // We'll try to show a toast and save to log
+            runOnUiThread {
+                try {
+                    if (::errorLogText.isInitialized) {
+                        logError("CRASH: ${throwable.message}")
+                        logError(throwable)
+                        errorLogVisible = true
+                        errorLogView.visibility = View.VISIBLE
+                    } else {
+                        // Fallback: show a simple dialog? Can't because activity may be gone
+                        Toast.makeText(this, "Fatal error: ${throwable.message}", Toast.LENGTH_LONG).show()
+                    }
+                } catch (e: Exception) {
+                    // Ignore
+                }
             }
-            setTextColor(Color.WHITE)
-            text = "00:00"
-            visibility = View.GONE
+            // Let the default handler also handle it (so the app still crashes)
+            defaultHandler?.uncaughtException(thread, throwable)
         }
-        root.addView(debugOverlay)
 
-        // Error log view (initially hidden)
-        errorLogText = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            textSize = 12f
-        }
-        copyErrorButton = Button(this).apply {
-            text = "Copy Log"
-            setOnClickListener {
-                val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                val clip = android.content.ClipData.newPlainText("RTFP Error Log", errorLogText.text)
-                clipboard.setPrimaryClip(clip)
-                Toast.makeText(this@PlayerActivity, "Log copied", Toast.LENGTH_SHORT).show()
+        // Wrap entire onCreate in try-catch to show any initialization errors
+        try {
+            super.onCreate(savedInstanceState)
+
+            // Create UI first (so error log is available early)
+            val root = FrameLayout(this).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                setBackgroundColor(Color.BLACK)
+            }
+
+            // SurfaceView for video
+            surfaceView = SurfaceView(this).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            }
+            root.addView(surfaceView)
+
+            // Debug overlay (current time during seek)
+            debugOverlay = TextView(this).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
+                    topMargin = 50
+                }
+                setTextColor(Color.WHITE)
+                text = "00:00"
+                visibility = View.GONE
+            }
+            root.addView(debugOverlay)
+
+            // Error log view (initially hidden)
+            errorLogText = TextView(this).apply {
+                setTextColor(Color.WHITE)
+                textSize = 12f
+            }
+            copyErrorButton = Button(this).apply {
+                text = "Copy Log"
+                setOnClickListener {
+                    val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    val clip = android.content.ClipData.newPlainText("RTFP Error Log", errorLogText.text)
+                    clipboard.setPrimaryClip(clip)
+                    Toast.makeText(this@PlayerActivity, "Log copied", Toast.LENGTH_SHORT).show()
+                }
+            }
+            val errorContent = FrameLayout(this).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+                addView(errorLogText)
+                addView(copyErrorButton)
+            }
+            errorLogView = ScrollView(this).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    400
+                ).apply {
+                    gravity = android.view.Gravity.BOTTOM
+                    bottomMargin = 0
+                }
+                setBackgroundColor(Color.argb(200, 0, 0, 0))
+                addView(errorContent)
+                visibility = View.GONE
+            }
+            root.addView(errorLogView)
+
+            setContentView(root)
+
+            setupExoPlayer()
+            setupTouchListeners()
+
+            // Request storage permission on first launch (so it appears in settings)
+            requestStoragePermissionIfNeeded()
+
+            // Handle incoming intent
+            handleIntent(intent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            // Show error on a simple TextView if log view isn't ready
+            if (::errorLogText.isInitialized) {
+                logError("Fatal error during onCreate:")
+                logError(e)
+                errorLogVisible = true
+                errorLogView.visibility = View.VISIBLE
+            } else {
+                // Fallback: show a basic TextView with error
+                val tv = TextView(this)
+                tv.setTextColor(Color.RED)
+                tv.text = "FATAL ERROR: ${e.message}\n${e.stackTraceToString()}"
+                setContentView(tv)
             }
         }
-        val errorContent = FrameLayout(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            addView(errorLogText)
-            addView(copyErrorButton)
-        }
-        errorLogView = ScrollView(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                400
-            ).apply {
-                gravity = android.view.Gravity.BOTTOM
-                bottomMargin = 0
-            }
-            setBackgroundColor(Color.argb(200, 0, 0, 0))
-            addView(errorContent)
-            visibility = View.GONE
-        }
-        root.addView(errorLogView)
-
-        setContentView(root)
-
-        setupExoPlayer()
-        setupTouchListeners()
-
-        // Request storage permission on first launch (so it appears in settings)
-        requestStoragePermissionIfNeeded()
-
-        // Handle incoming intent
-        handleIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -475,11 +518,13 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun logError(message: String) {
         Log.e(TAG, message)
-        mainHandler.post {
-            val time = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-            errorLogText.append("$time: $message\n")
-            // Auto-scroll to bottom
-            errorLogView.post { errorLogView.fullScroll(ScrollView.FOCUS_DOWN) }
+        if (::errorLogText.isInitialized) {
+            mainHandler.post {
+                val time = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+                errorLogText.append("$time: $message\n")
+                // Auto-scroll to bottom
+                errorLogView.post { errorLogView.fullScroll(ScrollView.FOCUS_DOWN) }
+            }
         }
     }
 
