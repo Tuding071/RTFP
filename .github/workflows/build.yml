@@ -342,9 +342,8 @@ jobs:
           mv libffmpeg_wrapper.so app/src/main/jniLibs/$ABI/
 
       - name: Build APK
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug
+        # Use system gradle (no wrapper needed)
+        run: gradle assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
