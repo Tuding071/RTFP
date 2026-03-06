@@ -6,16 +6,19 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
+import android.util.AttributeSet
 import android.util.Log
 import android.view.MotionEvent
 import android.view.Surface
@@ -34,6 +37,7 @@ import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 import java.io.BufferedReader
 import java.io.File
@@ -46,12 +50,52 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
+/**
+ * A SurfaceView that maintains aspect ratio of video.
+ */
+class AspectRatioSurfaceView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = 0
+) : SurfaceView(context, attrs, defStyleAttr) {
+
+    var videoWidth: Int = 0
+    var videoHeight: Int = 0
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        if (videoWidth <= 0 || videoHeight <= 0) {
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+            return
+        }
+
+        val viewWidth = MeasureSpec.getSize(widthMeasureSpec)
+        val viewHeight = MeasureSpec.getSize(heightMeasureSpec)
+
+        val aspectRatio = videoWidth.toFloat() / videoHeight.toFloat()
+
+        var newWidth: Int
+        var newHeight: Int
+
+        if (viewWidth / aspectRatio <= viewHeight) {
+            // Width is limiting factor
+            newWidth = viewWidth
+            newHeight = (viewWidth / aspectRatio).toInt()
+        } else {
+            // Height is limiting factor
+            newHeight = viewHeight
+            newWidth = (viewHeight * aspectRatio).toInt()
+        }
+
+        setMeasuredDimension(newWidth, newHeight)
+    }
+}
+
 class PlayerActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------------------
     // UI Components
     // ------------------------------------------------------------------------
-    private lateinit var surfaceView: SurfaceView
+    private lateinit var surfaceView: AspectRatioSurfaceView
     private lateinit var debugOverlay: TextView
     private lateinit var errorLogView: ScrollView
     private lateinit var errorLogText: TextView
@@ -73,6 +117,7 @@ class PlayerActivity : AppCompatActivity() {
     private var isPlaying = false
     private var videoUri: Uri? = null
     private var nativeLibraryLoaded = false
+    private var savedPosition: Long = 0
 
     // ------------------------------------------------------------------------
     // FFmpeg native methods
@@ -113,6 +158,7 @@ class PlayerActivity : AppCompatActivity() {
         private const val PERMISSION_REQUEST_READ_STORAGE = 100
         private const val TAG = "RTFP"
         private const val LOG_FILE_NAME = "rtfp_crash_log.txt"
+        private const val KEY_POSITION = "player_position"
     }
 
     // ------------------------------------------------------------------------
@@ -122,13 +168,11 @@ class PlayerActivity : AppCompatActivity() {
         // Initialize file logging as early as possible
         logFile = File(cacheDir, LOG_FILE_NAME)
 
-        // Set custom uncaught exception handler to catch crashes
+        // Set custom uncaught exception handler
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            // Log to file first
             logToFile("*** CRASH *** Thread: ${thread.name}")
             logToFile(throwable)
-            // Also try to show on screen if possible (but app is crashing)
             runOnUiThread {
                 try {
                     if (::errorLogText.isInitialized) {
@@ -140,12 +184,17 @@ class PlayerActivity : AppCompatActivity() {
                     // Ignore
                 }
             }
-            // Let default handler terminate the app
             defaultHandler?.uncaughtException(thread, throwable)
         }
 
         try {
             super.onCreate(savedInstanceState)
+
+            // Restore saved position
+            if (savedInstanceState != null) {
+                savedPosition = savedInstanceState.getLong(KEY_POSITION, 0)
+                logToFile("Restored position: $savedPosition")
+            }
 
             // Create UI
             val root = FrameLayout(this).apply {
@@ -156,7 +205,7 @@ class PlayerActivity : AppCompatActivity() {
                 setBackgroundColor(Color.BLACK)
             }
 
-            surfaceView = SurfaceView(this).apply {
+            surfaceView = AspectRatioSurfaceView(this).apply {
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT
@@ -239,7 +288,7 @@ class PlayerActivity : AppCompatActivity() {
 
             setContentView(root)
 
-            // Load previous logs from file and display
+            // Load previous logs from file
             loadPreviousLogs()
 
             setupExoPlayer()
@@ -250,13 +299,11 @@ class PlayerActivity : AppCompatActivity() {
         } catch (e: Exception) {
             logToFile("Exception in onCreate: ${e.message}")
             logToFile(e)
-            // Show error on screen
             if (::errorLogText.isInitialized) {
                 appendToErrorLogView("FATAL: ${e.message}")
                 errorLogVisible = true
                 errorLogView.visibility = View.VISIBLE
             } else {
-                // Fallback
                 val tv = TextView(this)
                 tv.setTextColor(Color.RED)
                 tv.text = "FATAL ERROR: ${e.message}\n${e.stackTraceToString()}"
@@ -265,17 +312,84 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putLong(KEY_POSITION, exoPlayer?.currentPosition ?: savedPosition)
+        logToFile("Saved position: ${exoPlayer?.currentPosition ?: savedPosition}")
+    }
+
+    override fun onRestoreInstanceState(savedInstanceState: Bundle) {
+        super.onRestoreInstanceState(savedInstanceState)
+        savedPosition = savedInstanceState.getLong(KEY_POSITION, 0)
+        logToFile("Restored position from instance: $savedPosition")
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        // New video opened – release old player and create new one
+        releasePlayer()
+        setupExoPlayer()
         handleIntent(intent)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Pause playback and save position
+        exoPlayer?.let {
+            if (it.isPlaying) {
+                it.pause()
+                isPlaying = false
+                logToFile("Paused onPause")
+            }
+            savedPosition = it.currentPosition
+        }
+        // Close FFmpeg handle to release file
+        if (ffmpegHandle != 0L) {
+            nativeClose(ffmpegHandle)
+            ffmpegHandle = 0
+            logToFile("Closed FFmpeg handle onPause")
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Do not auto-play; user must tap to resume (as requested)
+        logToFile("onResume, position: $savedPosition")
+        // Restore saved position if needed
+        if (savedPosition > 0 && exoPlayer != null) {
+            exoPlayer?.seekTo(savedPosition)
+            logToFile("Restored position onResume: $savedPosition")
+        }
+        // Re-open FFmpeg handle if we have a video
+        if (videoUri != null && nativeLibraryLoaded) {
+            val file = uriToFile(videoUri!!)
+            if (file != null && file.exists()) {
+                ffmpegHandle = nativeOpenFile(file.absolutePath)
+                logToFile("Re-opened FFmpeg handle onResume: $ffmpegHandle")
+            }
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Pause if playing (already done in onPause)
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        exoPlayer?.release()
+        releasePlayer()
         if (ffmpegHandle != 0L) {
             nativeClose(ffmpegHandle)
             ffmpegHandle = 0
+        }
+    }
+
+    private fun releasePlayer() {
+        exoPlayer?.let {
+            savedPosition = it.currentPosition
+            it.release()
+            exoPlayer = null
+            logToFile("ExoPlayer released")
         }
     }
 
@@ -291,9 +405,7 @@ class PlayerActivity : AppCompatActivity() {
                 Log.e(TAG, "Failed to write log", e)
             }
         }
-        // Also log to Logcat
         Log.d(TAG, message)
-        // Update UI if available
         if (::errorLogText.isInitialized) {
             mainHandler.post {
                 appendToErrorLogView(message)
@@ -311,7 +423,6 @@ class PlayerActivity : AppCompatActivity() {
     private fun appendToErrorLogView(message: String) {
         val time = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
         errorLogText.append("$time: $message\n")
-        // Auto-scroll to bottom
         errorLogView.post { errorLogView.fullScroll(ScrollView.FOCUS_DOWN) }
     }
 
@@ -395,11 +506,6 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun openVideo(uri: Uri) {
         videoUri = uri
-        // Check if we have a surface ready
-        if (!surfaceView.holder.surface.isValid) {
-            logToFile("Surface not ready yet, waiting...")
-            // We'll rely on surface callback to set media item later? Actually ExoPlayer handles surface later.
-        }
         val mediaItem = MediaItem.fromUri(uri)
         exoPlayer?.setMediaItem(mediaItem)
         exoPlayer?.prepare()
@@ -493,6 +599,13 @@ class PlayerActivity : AppCompatActivity() {
                     logToFile("ExoPlayer error: ${error.message}")
                     logToFile(error)
                     Toast.makeText(this@PlayerActivity, "Playback error", Toast.LENGTH_SHORT).show()
+                }
+                override fun onVideoSizeChanged(videoSize: VideoSize) {
+                    super.onVideoSizeChanged(videoSize)
+                    logToFile("Video size changed: ${videoSize.width}x${videoSize.height}")
+                    surfaceView.videoWidth = videoSize.width
+                    surfaceView.videoHeight = videoSize.height
+                    surfaceView.requestLayout()
                 }
             })
         }
@@ -635,7 +748,7 @@ class PlayerActivity : AppCompatActivity() {
         try {
             val canvas: Canvas? = surface.lockCanvas(null)
             canvas?.apply {
-                val rect = android.graphics.Rect(0, 0, width, height)
+                val rect = Rect(0, 0, width, height)
                 val paint = Paint().apply { isFilterBitmap = true }
                 drawBitmap(bitmap, null, rect, paint)
                 surface.unlockCanvasAndPost(this)
@@ -660,7 +773,6 @@ class PlayerActivity : AppCompatActivity() {
         errorLogVisible = !errorLogVisible
         errorLogView.visibility = if (errorLogVisible) View.VISIBLE else View.GONE
         if (errorLogVisible) {
-            // Refresh with latest logs from file (in case new logs were added after UI load)
             errorLogText.text = ""
             loadPreviousLogs()
         }
