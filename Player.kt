@@ -772,18 +772,41 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
+    // ------------------------------------------------------------------------
+    // Enhanced drawing diagnostics
+    // ------------------------------------------------------------------------
     private fun drawBitmapOnSurface(bitmap: Bitmap) {
-        val surface = surfaceView.holder.surface ?: return
+        val surface = surfaceView.holder.surface
+        if (surface == null || !surface.isValid) {
+            logToFile("Surface invalid or null")
+            return
+        }
         try {
             val canvas = surface.lockCanvas(null)
             if (canvas == null) {
                 logToFile("lockCanvas returned null")
                 return
             }
+            logToFile("Canvas dimensions: ${canvas.width}x${canvas.height}, Bitmap: ${bitmap.width}x${bitmap.height}, config: ${bitmap.config}")
+            if (bitmap.isRecycled) {
+                logToFile("Bitmap is recycled")
+                surface.unlockCanvasAndPost(canvas)
+                return
+            }
             canvas.drawBitmap(bitmap, null, Rect(0, 0, canvas.width, canvas.height), null)
             surface.unlockCanvasAndPost(canvas)
+        } catch (e: IllegalArgumentException) {
+            logToFile("IllegalArgumentException in draw: ${e.message ?: "null message"} - canvas? ${::canvas.isInitialized}")
+            e.printStackTrace()
+            // Try to unlock if locked
+            try {
+                surface?.unlockCanvasAndPost(canvas)
+            } catch (ignored: Exception) {}
         } catch (e: Exception) {
             logToFile("Draw exception: ${e.javaClass.simpleName} - ${e.message}")
+            try {
+                surface?.unlockCanvasAndPost(canvas)
+            } catch (ignored: Exception) {}
         }
     }
 
