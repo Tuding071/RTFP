@@ -394,7 +394,8 @@ jobs:
             -L ffmpeg_src/install/$ABI/lib \
             -shared -o libffmpeg_wrapper.so ffmpeg_wrapper.c \
             -static-libstdc++ \
-            -lavformat -lavcodec -lavutil -lswscale -landroid -lz
+            -lavformat -lavcodec -lavutil -lswscale -landroid -lz \
+            -lm
 
           mv libffmpeg_wrapper.so app/src/main/jniLibs/$ABI/
 
