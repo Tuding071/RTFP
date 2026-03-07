@@ -19,7 +19,6 @@ import android.os.Looper
 import android.provider.OpenableColumns
 import android.util.AttributeSet
 import android.util.Log
-import android.view.Gravity
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -27,12 +26,50 @@ import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
-import android.widget.Button
-import android.widget.FrameLayout
-import android.widget.ScrollView
-import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
@@ -40,6 +77,9 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
@@ -52,6 +92,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
 
 // ------------------------------------------------------------------------
 // AspectRatioSurfaceView (unchanged)
@@ -91,40 +132,24 @@ class AspectRatioSurfaceView @JvmOverloads constructor(
     }
 }
 
+// ------------------------------------------------------------------------
+// PlayerActivity with Compose overlay
+// ------------------------------------------------------------------------
 class PlayerActivity : AppCompatActivity() {
 
-    // ------------------------------------------------------------------------
-    // UI Components
-    // ------------------------------------------------------------------------
+    // UI state
     private lateinit var surfaceView: AspectRatioSurfaceView
-    private lateinit var debugOverlay: TextView
-    private lateinit var ffmpegIndicator: TextView
-    private lateinit var errorLogView: ScrollView
-    private lateinit var errorLogText: TextView
-    private lateinit var copyErrorButton: Button
-    private lateinit var clearLogButton: Button
-    private var errorLogVisible = false
+    private var errorLogVisible by mutableStateOf(false)
+    private var logText by mutableStateOf("")
 
-    // ------------------------------------------------------------------------
-    // File logging
-    // ------------------------------------------------------------------------
-    private lateinit var logFile: File
-    private val logLock = Any()
-    private val isLoggingEnabled = AtomicBoolean(true)
-
-    // ------------------------------------------------------------------------
-    // ExoPlayer
-    // ------------------------------------------------------------------------
+    // Player state
     private var exoPlayer: ExoPlayer? = null
     private var isPlaying = false
     private var videoUri: Uri? = null
     private var nativeLibraryLoaded = false
     private var savedPosition: Long = 0
-    private var surfaceAttached = true  // whether ExoPlayer owns the surface
 
-    // ------------------------------------------------------------------------
-    // FFmpeg native methods (byte array version)
-    // ------------------------------------------------------------------------
+    // FFmpeg native methods
     private external fun nativeOpenFile(path: String): Long
     private external fun nativeSeekTo(handle: Long, timestampUs: Long): Int
     private external fun nativeGetFrameRGBA(handle: Long): ByteArray?
@@ -137,40 +162,24 @@ class PlayerActivity : AppCompatActivity() {
     private var videoWidth = 0
     private var videoHeight = 0
 
-    // ------------------------------------------------------------------------
     // Drag seeking state
-    // ------------------------------------------------------------------------
-    private val mainHandler = Handler(Looper.getMainLooper())
     private var isDragging = false
-    private var dragStartX = 0f
     private var dragStartPositionMs = 0L
     private var currentDragPositionMs = 0L
+    private var wasPlayingBeforeSeek = false
+
+    // File logging
+    private lateinit var logFile: File
+    private val logLock = Any()
+    private val isLoggingEnabled = AtomicBoolean(true)
+
+    // Surface attachment state
+    private var surfaceAttached = true
 
     companion object {
         private const val PERMISSION_REQUEST_READ_STORAGE = 100
         private const val TAG = "RTFP"
-        private const val LOG_FILE_NAME = "rtfp_crash_log.txt"
-        private const val KEY_POSITION = "player_position"
-        private const val DRAG_THRESHOLD = 10
-    }
-
-    // ------------------------------------------------------------------------
-    // Surface management
-    // ------------------------------------------------------------------------
-    private fun detachSurface() {
-        if (surfaceAttached) {
-            exoPlayer?.clearVideoSurface()
-            surfaceAttached = false
-            logToFile("Surface detached from ExoPlayer")
-        }
-    }
-
-    private fun reattachSurface() {
-        if (!surfaceAttached && surfaceView.holder.surface?.isValid == true) {
-            exoPlayer?.setVideoSurface(surfaceView.holder.surface)
-            surfaceAttached = true
-            logToFile("Surface reattached to ExoPlayer")
-        }
+        private const val LOG_FILE_NAME = "rtfp_log.txt"
     }
 
     // ------------------------------------------------------------------------
@@ -215,249 +224,128 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     // ------------------------------------------------------------------------
-    // Activity lifecycle
+    // Surface management
     // ------------------------------------------------------------------------
-    override fun onCreate(savedInstanceState: Bundle?) {
-        logFile = File(cacheDir, LOG_FILE_NAME)
-
-        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
-            logToFile("*** CRASH *** Thread: ${thread.name}")
-            logToFile(throwable)
-            runOnUiThread {
-                try {
-                    if (::errorLogText.isInitialized) {
-                        appendToErrorLogView("*** CRASH *** ${throwable.message}")
-                        errorLogVisible = true
-                        errorLogView.visibility = View.VISIBLE
-                    }
-                } catch (e: Exception) { /* ignore */ }
-            }
-            defaultHandler?.uncaughtException(thread, throwable)
-        }
-
-        try {
-            super.onCreate(savedInstanceState)
-            nativeLibraryLoaded = loadNativeLibrary()
-            hideSystemUI()
-
-            if (savedInstanceState != null) {
-                savedPosition = savedInstanceState.getLong(KEY_POSITION, 0)
-                logToFile("Restored position: $savedPosition")
-            }
-
-            val root = FrameLayout(this).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-                setBackgroundColor(Color.BLACK)
-            }
-
-            surfaceView = AspectRatioSurfaceView(this).apply {
-                layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { gravity = Gravity.CENTER }
-            }
-            root.addView(surfaceView)
-
-            debugOverlay = TextView(this).apply {
-                layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-                    topMargin = 50
-                }
-                setTextColor(Color.WHITE)
-                text = "00:00"
-                visibility = View.GONE
-            }
-            root.addView(debugOverlay)
-
-            ffmpegIndicator = TextView(this).apply {
-                layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    gravity = Gravity.TOP or Gravity.END
-                    topMargin = 50
-                    rightMargin = 50
-                }
-                setTextColor(Color.GREEN)
-                text = "FFmpeg"
-                visibility = View.GONE
-            }
-            root.addView(ffmpegIndicator)
-
-            // Error log UI
-            errorLogText = TextView(this).apply {
-                setTextColor(Color.WHITE)
-                textSize = 12f
-            }
-            copyErrorButton = Button(this).apply {
-                text = "Copy Log"
-                setOnClickListener {
-                    val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    val clip = android.content.ClipData.newPlainText("RTFP Error Log", errorLogText.text)
-                    clipboard.setPrimaryClip(clip)
-                    Toast.makeText(this@PlayerActivity, "Log copied", Toast.LENGTH_SHORT).show()
-                }
-            }
-            clearLogButton = Button(this).apply {
-                text = "Clear Log"
-                setOnClickListener {
-                    clearLogFile()
-                    errorLogText.text = ""
-                    Toast.makeText(this@PlayerActivity, "Log cleared", Toast.LENGTH_SHORT).show()
-                }
-            }
-            val buttonBar = FrameLayout(this).apply {
-                layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                copyErrorButton.layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { gravity = Gravity.START }
-                clearLogButton.layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { gravity = Gravity.END }
-                addView(copyErrorButton)
-                addView(clearLogButton)
-            }
-            val errorContent = FrameLayout(this).apply {
-                layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                addView(errorLogText)
-                addView(buttonBar)
-            }
-            errorLogView = ScrollView(this).apply {
-                layoutParams = FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    500
-                ).apply { gravity = Gravity.BOTTOM }
-                setBackgroundColor(Color.argb(200, 0, 0, 0))
-                addView(errorContent)
-                visibility = View.GONE
-            }
-            root.addView(errorLogView)
-
-            setContentView(root)
-
-            loadPreviousLogs()
-            setupExoPlayer()
-            setupTouchListeners()
-            requestStoragePermissionIfNeeded()
-            handleIntent(intent)
-        } catch (e: Exception) {
-            logToFile("Exception in onCreate: ${e.message}")
-            logToFile(e)
-            if (::errorLogText.isInitialized) {
-                appendToErrorLogView("FATAL: ${e.message}")
-                errorLogVisible = true
-                errorLogView.visibility = View.VISIBLE
-            } else {
-                val tv = TextView(this)
-                tv.setTextColor(Color.RED)
-                tv.text = "FATAL ERROR: ${e.message}\n${e.stackTraceToString()}"
-                setContentView(tv)
-            }
+    private fun detachSurface() {
+        if (surfaceAttached) {
+            exoPlayer?.clearVideoSurface()
+            surfaceAttached = false
+            logToFile("Surface detached from ExoPlayer")
         }
     }
 
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideSystemUI()
+    private fun reattachSurface() {
+        if (!surfaceAttached && surfaceView.holder.surface?.isValid == true) {
+            exoPlayer?.setVideoSurface(surfaceView.holder.surface)
+            surfaceAttached = true
+            logToFile("Surface reattached to ExoPlayer")
+        }
     }
 
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        outState.putLong(KEY_POSITION, exoPlayer?.currentPosition ?: savedPosition)
-    }
-
-    override fun onRestoreInstanceState(savedInstanceState: Bundle) {
-        super.onRestoreInstanceState(savedInstanceState)
-        savedPosition = savedInstanceState.getLong(KEY_POSITION, 0)
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        handleIntent(intent)
-    }
-
-    override fun onPause() {
-        super.onPause()
+    // ------------------------------------------------------------------------
+    // Playback control (called from Compose)
+    // ------------------------------------------------------------------------
+    fun togglePlayPause() {
         exoPlayer?.let {
             if (it.isPlaying) {
                 it.pause()
                 isPlaying = false
-                logToFile("Paused onPause")
+                logToFile("Paused")
+            } else {
+                it.play()
+                isPlaying = true
+                logToFile("Played")
             }
-            savedPosition = it.currentPosition
-        }
-        if (ffmpegHandle != 0L) {
-            nativeClose(ffmpegHandle)
-            ffmpegHandle = 0
-            logToFile("Closed FFmpeg handle onPause")
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        logToFile("onResume, position: $savedPosition")
-        if (savedPosition > 0 && exoPlayer != null) {
-            exoPlayer?.seekTo(savedPosition)
+    fun setSpeed(speed: Float) {
+        exoPlayer?.setPlaybackSpeed(speed)
+        logToFile("Speed set to $speed")
+    }
+
+    fun seekTo(positionMs: Long) {
+        exoPlayer?.seekTo(positionMs)
+    }
+
+    fun getCurrentPosition(): Long = exoPlayer?.currentPosition ?: 0
+    fun getDuration(): Long = exoPlayer?.duration ?: 0
+
+    // ------------------------------------------------------------------------
+    // FFmpeg seek mode
+    // ------------------------------------------------------------------------
+    fun startFfmpegSeekMode() {
+        if (!nativeLibraryLoaded || ffmpegHandle == 0L) {
+            logToFile("FFmpeg not ready for seek")
+            return
         }
-        if (videoUri != null && nativeLibraryLoaded) {
-            val file = uriToFile(videoUri!!)
-            if (file != null && file.exists()) {
-                ffmpegHandle = nativeOpenFile(file.absolutePath)
-                if (ffmpegHandle != 0L) {
-                    videoWidth = nativeGetWidth(ffmpegHandle)
-                    videoHeight = nativeGetHeight(ffmpegHandle)
-                    logToFile("Re-opened FFmpeg: ${videoWidth}x${videoHeight}")
+        exoPlayer?.pause()
+        detachSurface()
+        isFfmpegMode = true
+        isDragging = true
+        dragStartPositionMs = exoPlayer?.currentPosition ?: 0
+        currentDragPositionMs = dragStartPositionMs
+        wasPlayingBeforeSeek = isPlaying
+        logToFile("FFmpeg seek mode started")
+    }
+
+    fun updateFfmpegFrame(targetPositionMs: Long) {
+        if (!isFfmpegMode || ffmpegHandle == 0L) return
+        val timestampUs = targetPositionMs * 1000
+        try {
+            val result = nativeSeekTo(ffmpegHandle, timestampUs)
+            if (result == 0) {
+                val rgba = nativeGetFrameRGBA(ffmpegHandle)
+                if (rgba != null && videoWidth > 0 && videoHeight > 0) {
+                    val expected = videoWidth * videoHeight * 4
+                    if (rgba.size == expected) {
+                        val bitmap = Bitmap.createBitmap(videoWidth, videoHeight, Bitmap.Config.ARGB_8888)
+                        val buffer = ByteBuffer.wrap(rgba).order(ByteOrder.nativeOrder())
+                        bitmap.copyPixelsFromBuffer(buffer)
+                        drawBitmapOnSurface(bitmap)
+                        bitmap.recycle()
+                    }
                 }
             }
+        } catch (e: Exception) {
+            logToFile("FFmpeg frame error: ${e.message}")
         }
-        // Ensure surface is reattached if needed
-        if (!surfaceAttached && surfaceView.holder.surface?.isValid == true) {
+    }
+
+    fun endFfmpegSeekMode(finalPositionMs: Long) {
+        if (isFfmpegMode) {
+            isFfmpegMode = false
+            isDragging = false
             reattachSurface()
+            exoPlayer?.seekTo(finalPositionMs)
+            if (wasPlayingBeforeSeek) {
+                exoPlayer?.play()
+                isPlaying = true
+            }
+            logToFile("Seek ended at ${finalPositionMs}ms")
         }
-        hideSystemUI()
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        releasePlayer()
-        if (ffmpegHandle != 0L) {
-            nativeClose(ffmpegHandle)
-            ffmpegHandle = 0
-        }
-    }
-
-    override fun onBackPressed() {
-        releasePlayer()
-        super.onBackPressed()
-    }
-
-    private fun releasePlayer() {
-        exoPlayer?.let {
-            savedPosition = it.currentPosition
-            it.release()
-            exoPlayer = null
-            logToFile("ExoPlayer released")
-        }
-        surfaceAttached = false
     }
 
     // ------------------------------------------------------------------------
-    // Logging helpers
+    // Drawing on surface
+    // ------------------------------------------------------------------------
+    private fun drawBitmapOnSurface(bitmap: Bitmap) {
+        val surface = surfaceView.holder.surface ?: return
+        var canvas: Canvas? = null
+        try {
+            canvas = surface.lockCanvas(null) ?: return
+            canvas.drawBitmap(bitmap, null, Rect(0, 0, canvas.width, canvas.height), null)
+            surface.unlockCanvasAndPost(canvas)
+        } catch (e: Exception) {
+            logToFile("Draw error: ${e.message}")
+            if (canvas != null) {
+                try { surface.unlockCanvasAndPost(canvas) } catch (_: Exception) {}
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // File logging
     // ------------------------------------------------------------------------
     private fun logToFile(message: String) {
         if (!isLoggingEnabled.get()) return
@@ -469,9 +357,7 @@ class PlayerActivity : AppCompatActivity() {
             }
         }
         Log.d(TAG, message)
-        if (::errorLogText.isInitialized) {
-            mainHandler.post { appendToErrorLogView(message) }
-        }
+        runOnUiThread { logText += "$message\n" }
     }
 
     private fun logToFile(throwable: Throwable) {
@@ -481,38 +367,23 @@ class PlayerActivity : AppCompatActivity() {
         logToFile(sw.toString())
     }
 
-    private fun appendToErrorLogView(message: String) {
-        val time = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-        errorLogText.append("$time: $message\n")
-        errorLogView.post { errorLogView.fullScroll(ScrollView.FOCUS_DOWN) }
-    }
-
     private fun loadPreviousLogs() {
         try {
             if (logFile.exists()) {
                 BufferedReader(FileReader(logFile)).use { reader ->
-                    reader.forEachLine { line -> appendToErrorLogView(line) }
+                    reader.forEachLine { line -> logText += "$line\n" }
                 }
-                appendToErrorLogView("--- End of previous log ---")
+                logText += "--- End of previous log ---\n"
             } else {
-                appendToErrorLogView("No previous crash log.")
+                logText = "No previous log.\n"
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load logs", e)
         }
     }
 
-    private fun clearLogFile() {
-        synchronized(logLock) {
-            try {
-                if (logFile.exists()) logFile.delete()
-                logFile.createNewFile()
-            } catch (e: Exception) { /* ignore */ }
-        }
-    }
-
     // ------------------------------------------------------------------------
-    // Permissions
+    // Permission handling
     // ------------------------------------------------------------------------
     private fun requestStoragePermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
@@ -626,12 +497,7 @@ class PlayerActivity : AppCompatActivity() {
             surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
                 override fun surfaceCreated(holder: SurfaceHolder) {
                     logToFile("Surface created")
-                    if (surfaceAttached) {
-                        setVideoSurface(holder.surface)
-                    } else {
-                        // Surface recreated while detached – just remember it, we'll attach later
-                        logToFile("Surface created while detached")
-                    }
+                    if (surfaceAttached) setVideoSurface(holder.surface)
                 }
                 override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, hh: Int) {
                     logToFile("Surface changed: ${w}x$hh")
@@ -663,228 +529,471 @@ class PlayerActivity : AppCompatActivity() {
         surfaceAttached = true
     }
 
-    // ------------------------------------------------------------------------
-    // Touch handling (tap + drag)
-    // ------------------------------------------------------------------------
-    private fun setupTouchListeners() {
-        surfaceView.setOnTouchListener { _, event ->
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    logToFile("Touch DOWN at (${event.x}, ${event.y})")
-                    if (event.x < 200 && event.y < 200) {
-                        toggleErrorLog()
-                        return@setOnTouchListener true
-                    }
-                    dragStartX = event.x
-                    dragStartPositionMs = exoPlayer?.currentPosition ?: 0
-                    currentDragPositionMs = dragStartPositionMs
-                    false
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = event.x - dragStartX
-                    val duration = exoPlayer?.duration ?: 0
-                    if (!isDragging && kotlin.math.abs(dx) > DRAG_THRESHOLD && duration > 0) {
-                        isDragging = true
-                        startFfmpegSeekMode()
-                    }
-                    if (isDragging && duration > 0) {
-                        val deltaMs = (dx / 100f * 1000).toLong()
-                        val newPos = (dragStartPositionMs + deltaMs).coerceIn(0, duration)
-                        if (newPos != currentDragPositionMs) {
-                            currentDragPositionMs = newPos
-                            val success = updateFfmpegFrame(currentDragPositionMs * 1000)
-                            if (!success) logToFile("FFmpeg frame failed")
-                            updateOverlayTime(currentDragPositionMs)
-                        }
-                        return@setOnTouchListener true
-                    }
-                    false
-                }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (isDragging) {
-                        isDragging = false
-                        debugOverlay.visibility = View.GONE
-                        ffmpegIndicator.visibility = View.GONE
-                        exitFfmpegSeekMode()
-                        exoPlayer?.seekTo(currentDragPositionMs)
-                        if (isPlaying) exoPlayer?.play()
-                        logToFile("Seek ended at ${currentDragPositionMs}ms")
-                    } else {
-                        togglePlayPause()
-                    }
-                    true
-                }
-                else -> false
-            }
+    private fun releasePlayer() {
+        exoPlayer?.let {
+            savedPosition = it.currentPosition
+            it.release()
+            exoPlayer = null
+            logToFile("ExoPlayer released")
         }
+        surfaceAttached = false
     }
 
-    private fun togglePlayPause() {
+    // ------------------------------------------------------------------------
+    // Activity lifecycle
+    // ------------------------------------------------------------------------
+    override fun onCreate(savedInstanceState: Bundle?) {
+        logFile = File(cacheDir, LOG_FILE_NAME)
+
+        // Set uncaught exception handler
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            logToFile("*** CRASH *** Thread: ${thread.name}")
+            logToFile(throwable)
+            defaultHandler?.uncaughtException(thread, throwable)
+        }
+
+        super.onCreate(savedInstanceState)
+        nativeLibraryLoaded = loadNativeLibrary()
+        hideSystemUI()
+
+        if (savedInstanceState != null) {
+            savedPosition = savedInstanceState.getLong("position", 0)
+            logToFile("Restored position: $savedPosition")
+        }
+
+        // Create SurfaceView
+        surfaceView = AspectRatioSurfaceView(this).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        // Set Compose content
+        setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    // AndroidView to host SurfaceView
+                    androidx.compose.ui.viewinterop.AndroidView(
+                        factory = { surfaceView },
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    // Overlay with gestures and UI
+                    PlayerOverlay(
+                        player = this@PlayerActivity,
+                        logText = logText,
+                        onToggleLog = { errorLogVisible = !errorLogVisible },
+                        logVisible = errorLogVisible,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+        }
+
+        loadPreviousLogs()
+        requestStoragePermissionIfNeeded()
+        handleIntent(intent)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putLong("position", exoPlayer?.currentPosition ?: savedPosition)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    override fun onPause() {
+        super.onPause()
         exoPlayer?.let {
             if (it.isPlaying) {
                 it.pause()
                 isPlaying = false
-                logToFile("Paused (tap)")
-            } else {
-                it.play()
-                isPlaying = true
-                logToFile("Played (tap)")
             }
+            savedPosition = it.currentPosition
+        }
+        if (ffmpegHandle != 0L) {
+            nativeClose(ffmpegHandle)
+            ffmpegHandle = 0
         }
     }
 
-    // ------------------------------------------------------------------------
-    // FFmpeg seek mode (byte array version)
-    // ------------------------------------------------------------------------
-    private fun startFfmpegSeekMode() {
-        if (!nativeLibraryLoaded) {
-            logToFile("FFmpeg not loaded")
-            return
+    override fun onResume() {
+        super.onResume()
+        if (savedPosition > 0 && exoPlayer != null) {
+            exoPlayer?.seekTo(savedPosition)
         }
-        if (ffmpegHandle == 0L) {
-            logToFile("FFmpeg handle 0")
-            return
-        }
-        exoPlayer?.pause()
-        detachSurface()  // Release surface from ExoPlayer
-        isFfmpegMode = true
-        debugOverlay.visibility = View.VISIBLE
-        ffmpegIndicator.visibility = View.VISIBLE
-        updateFfmpegFrame(exoPlayer?.currentPosition?.times(1000) ?: 0)
-        logToFile("FFmpeg seek started")
-        Toast.makeText(this, "FFmpeg seek", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun updateFfmpegFrame(timestampUs: Long): Boolean {
-        if (!isFfmpegMode || ffmpegHandle == 0L) return false
-        return try {
-            val result = nativeSeekTo(ffmpegHandle, timestampUs)
-            if (result == 0) {
-                val rgba = nativeGetFrameRGBA(ffmpegHandle)
-                if (rgba != null && videoWidth > 0 && videoHeight > 0) {
-                    val expectedSize = videoWidth * videoHeight * 4
-                    logToFile("Frame size: ${rgba.size}, expected: $expectedSize")
-                    if (rgba.size != expectedSize) {
-                        logToFile("Size mismatch, abort")
-                        return false
-                    }
-                    // Try creating bitmap with buffer copy
-                    try {
-                        val bitmap = Bitmap.createBitmap(videoWidth, videoHeight, Bitmap.Config.ARGB_8888)
-                        val buffer = ByteBuffer.wrap(rgba).order(ByteOrder.nativeOrder())
-                        bitmap.copyPixelsFromBuffer(buffer)
-                        drawBitmapOnSurface(bitmap)
-                        bitmap.recycle()
-                        true
-                    } catch (e: Exception) {
-                        logToFile("Bitmap creation/draw exception: ${e.javaClass.simpleName} - ${e.message}")
-                        // Fallback: try using setPixels (slower but may work)
-                        try {
-                            val bitmap = Bitmap.createBitmap(videoWidth, videoHeight, Bitmap.Config.ARGB_8888)
-                            val pixels = IntArray(videoWidth * videoHeight)
-                            // Convert RGBA to ARGB
-                            for (i in pixels.indices) {
-                                val r = rgba[i * 4].toInt() and 0xFF
-                                val g = rgba[i * 4 + 1].toInt() and 0xFF
-                                val b = rgba[i * 4 + 2].toInt() and 0xFF
-                                val a = rgba[i * 4 + 3].toInt() and 0xFF
-                                pixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
-                            }
-                            bitmap.setPixels(pixels, 0, videoWidth, 0, 0, videoWidth, videoHeight)
-                            drawBitmapOnSurface(bitmap)
-                            bitmap.recycle()
-                            true
-                        } catch (e2: Exception) {
-                            logToFile("Fallback also failed: ${e2.message}")
-                            false
-                        }
-                    }
-                } else {
-                    logToFile("Invalid frame data: rgba=${rgba != null}, w=$videoWidth, h=$videoHeight")
-                    false
+        if (videoUri != null && nativeLibraryLoaded && ffmpegHandle == 0L) {
+            val file = uriToFile(videoUri!!)
+            if (file != null && file.exists()) {
+                ffmpegHandle = nativeOpenFile(file.absolutePath)
+                if (ffmpegHandle != 0L) {
+                    videoWidth = nativeGetWidth(ffmpegHandle)
+                    videoHeight = nativeGetHeight(ffmpegHandle)
                 }
-            } else {
-                logToFile("nativeSeekTo failed: $result")
-                false
             }
-        } catch (e: Exception) {
-            logToFile("FFmpeg frame exception: ${e.message}")
-            false
+        }
+        if (!surfaceAttached && surfaceView.holder.surface?.isValid == true) {
+            reattachSurface()
+        }
+        hideSystemUI()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        releasePlayer()
+        if (ffmpegHandle != 0L) {
+            nativeClose(ffmpegHandle)
+            ffmpegHandle = 0
+        }
+    }
+}
+
+// ------------------------------------------------------------------------
+// Compose Overlay
+// ------------------------------------------------------------------------
+@Composable
+fun PlayerOverlay(
+    player: PlayerActivity,
+    logText: String,
+    onToggleLog: () -> Unit,
+    logVisible: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val scope = rememberCoroutineScope()
+    val configuration = LocalConfiguration.current
+    val screenWidth = configuration.screenWidthDp.dp
+    val screenHeight = configuration.screenHeightDp.dp
+
+    // Gesture state
+    var isLongPressing by remember { mutableStateOf(false) }
+    var isDragging by remember { mutableStateOf(false) }
+    var dragStartX by remember { mutableFloatStateOf(0f) }
+    var dragStartPositionMs by remember { mutableLongStateOf(0L) }
+    var currentDragPositionMs by remember { mutableLongStateOf(0L) }
+    var wasPlayingBeforeDrag by remember { mutableStateOf(false) }
+
+    // UI state
+    var showSeekbar by remember { mutableStateOf(true) }
+    var showTimeOverlay by remember { mutableStateOf(false) }
+    var seekTargetTime by remember { mutableStateOf("") }
+    var currentTime by remember { mutableStateOf("00:00") }
+    var totalTime by remember { mutableStateOf("00:00") }
+    var seekDirection by remember { mutableStateOf("") }
+    var feedbackText by remember { mutableStateOf("") }
+    var showFeedback by remember { mutableStateOf(false) }
+
+    // Update time periodically
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            if (!isDragging) {
+                val pos = player.getCurrentPosition()
+                val dur = player.getDuration()
+                currentTime = formatTime(pos)
+                totalTime = formatTime(dur)
+            }
+            delay(200)
         }
     }
 
-    // ------------------------------------------------------------------------
-    // Enhanced drawing diagnostics (with stack trace logging)
-    // ------------------------------------------------------------------------
-    private fun drawBitmapOnSurface(bitmap: Bitmap) {
-        val surface = surfaceView.holder.surface
-        if (surface == null || !surface.isValid) {
-            logToFile("Surface invalid or null")
-            return
-        }
-        // Ensure we own the surface
-        if (surfaceAttached) {
-            logToFile("Surface still attached to ExoPlayer, cannot draw")
-            return
-        }
-        var canvas: Canvas? = null
-        try {
-            canvas = surface.lockCanvas(null)
-            if (canvas == null) {
-                logToFile("lockCanvas returned null")
-                return
-            }
-            logToFile("Canvas dimensions: ${canvas.width}x${canvas.height}, Bitmap: ${bitmap.width}x${bitmap.height}, config: ${bitmap.config}")
-            if (bitmap.isRecycled) {
-                logToFile("Bitmap is recycled")
-                surface.unlockCanvasAndPost(canvas)
-                return
-            }
-            canvas.drawBitmap(bitmap, null, Rect(0, 0, canvas.width, canvas.height), null)
-            surface.unlockCanvasAndPost(canvas)
-        } catch (e: IllegalArgumentException) {
-            logToFile("IllegalArgumentException in draw: ${e.message ?: "null message"}")
-            val sw = StringWriter()
-            val pw = PrintWriter(sw)
-            e.printStackTrace(pw)
-            logToFile(sw.toString())
-            if (canvas != null) {
-                try {
-                    surface?.unlockCanvasAndPost(canvas)
-                } catch (ignored: Exception) {}
-            }
-        } catch (e: Exception) {
-            logToFile("Draw exception: ${e.javaClass.simpleName} - ${e.message}")
-            val sw = StringWriter()
-            val pw = PrintWriter(sw)
-            e.printStackTrace(pw)
-            logToFile(sw.toString())
-            if (canvas != null) {
-                try {
-                    surface?.unlockCanvasAndPost(canvas)
-                } catch (ignored: Exception) {}
-            }
+    // Hide seekbar after inactivity
+    LaunchedEffect(showSeekbar) {
+        if (showSeekbar) {
+            delay(4000)
+            showSeekbar = false
         }
     }
 
-    private fun exitFfmpegSeekMode() {
-        isFfmpegMode = false
-        reattachSurface()  // Give surface back to ExoPlayer
-    }
-
-    private fun updateOverlayTime(ms: Long) {
-        val sec = ms / 1000
-        val minutes = sec / 60
-        val seconds = sec % 60
-        debugOverlay.text = String.format("%02d:%02d", minutes, seconds)
-    }
-
-    private fun toggleErrorLog() {
-        errorLogVisible = !errorLogVisible
-        errorLogView.visibility = if (errorLogVisible) View.VISIBLE else View.GONE
-        if (errorLogVisible) {
-            errorLogText.text = ""
-            loadPreviousLogs()
+    // Long press speed control
+    LaunchedEffect(isLongPressing) {
+        if (isLongPressing) {
+            player.setSpeed(2.0f)
+        } else {
+            player.setSpeed(1.0f)
         }
     }
+
+    // Main gesture area
+    Box(modifier = modifier) {
+        // Transparent overlay for gestures
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = {
+                            player.togglePlayPause()
+                            showFeedback = true
+                            feedbackText = if (player.isPlaying) "Play" else "Pause"
+                            scope.launch {
+                                delay(1000)
+                                showFeedback = false
+                            }
+                        },
+                        onLongPress = {
+                            isLongPressing = true
+                        }
+                    )
+                }
+                .pointerInput(Unit) {
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            dragStartX = offset.x
+                            dragStartPositionMs = player.getCurrentPosition()
+                            wasPlayingBeforeDrag = player.isPlaying
+                            player.startFfmpegSeekMode()
+                            isDragging = true
+                            showSeekbar = true // Keep visible during drag
+                        },
+                        onDrag = { change, dragAmount ->
+                            val deltaX = change.position.x - dragStartX
+                            val screenWidthPx = with(LocalDensity.current) { screenWidth.toPx() }
+                            val deltaMs = (deltaX / screenWidthPx * player.getDuration()).toLong()
+                            val newPos = (dragStartPositionMs + deltaMs).coerceIn(0, player.getDuration())
+                            if (newPos != currentDragPositionMs) {
+                                currentDragPositionMs = newPos
+                                player.updateFfmpegFrame(newPos)
+                                seekTargetTime = formatTime(newPos)
+                                showTimeOverlay = true
+                                seekDirection = if (deltaX > 0) "+" else "-"
+                            }
+                        },
+                        onDragEnd = {
+                            player.endFfmpegSeekMode(currentDragPositionMs)
+                            isDragging = false
+                            showTimeOverlay = false
+                        }
+                    )
+                }
+                .pointerInput(Unit) {
+                    detectVerticalSwipes(
+                        onSwipeUp = {
+                            val newPos = (player.getCurrentPosition() + 5000).coerceAtMost(player.getDuration())
+                            player.seekTo(newPos)
+                            feedbackText = "+5s"
+                            showFeedback = true
+                            scope.launch {
+                                delay(1000)
+                                showFeedback = false
+                            }
+                        },
+                        onSwipeDown = {
+                            val newPos = (player.getCurrentPosition() - 5000).coerceAtLeast(0)
+                            player.seekTo(newPos)
+                            feedbackText = "-5s"
+                            showFeedback = true
+                            scope.launch {
+                                delay(1000)
+                                showFeedback = false
+                            }
+                        }
+                    )
+                }
+        )
+
+        // Top right log button
+        Button(
+            onClick = onToggleLog,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(16.dp)
+                .size(48.dp)
+                .clip(RoundedCornerShape(24.dp)),
+            shape = RoundedCornerShape(24.dp)
+        ) {
+            Text("📄", fontSize = 20.sp)
+        }
+
+        // Log panel (when visible)
+        if (logVisible) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(300.dp)
+                    .background(Color.Black.copy(alpha = 0.8f))
+                    .padding(8.dp)
+            ) {
+                Column {
+                    Text(
+                        text = logText,
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        Button(onClick = { /* copy log */ }) { Text("Copy") }
+                        Button(onClick = { /* clear log */ }) { Text("Clear") }
+                        Button(onClick = onToggleLog) { Text("Close") }
+                    }
+                }
+            }
+        }
+
+        // Seek bar and time
+        if (showSeekbar) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Column {
+                    // Current time / total time
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = if (showTimeOverlay) seekTargetTime else currentTime,
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier
+                                .background(Color.DarkGray.copy(alpha = 0.8f))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                        if (showTimeOverlay) {
+                            Text(
+                                text = seekDirection,
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .background(Color.DarkGray.copy(alpha = 0.8f))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                        Text(
+                            text = totalTime,
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier
+                                .background(Color.DarkGray.copy(alpha = 0.8f))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Seek bar
+                    SimpleSeekBar(
+                        position = if (isDragging) currentDragPositionMs.toFloat() else player.getCurrentPosition().toFloat(),
+                        duration = player.getDuration().toFloat(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                    )
+                }
+            }
+        }
+
+        // Feedback text (center)
+        if (showFeedback) {
+            Text(
+                text = feedbackText,
+                color = Color.White,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color.DarkGray.copy(alpha = 0.8f))
+                    .padding(horizontal = 24.dp, vertical = 12.dp)
+                    .clip(RoundedCornerShape(8.dp))
+            )
+        }
+
+        // Speed indicator
+        if (isLongPressing) {
+            Text(
+                text = "2X",
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .offset(y = 80.dp)
+                    .background(Color.DarkGray.copy(alpha = 0.8f))
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .clip(RoundedCornerShape(8.dp))
+            )
+        }
+    }
+}
+
+// ------------------------------------------------------------------------
+// Simple Seek Bar (draggable)
+// ------------------------------------------------------------------------
+@Composable
+fun SimpleSeekBar(
+    position: Float,
+    duration: Float,
+    modifier: Modifier = Modifier
+) {
+    val progress = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f
+    Box(modifier = modifier) {
+        // Background
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .align(Alignment.CenterStart)
+                .background(Color.Gray.copy(alpha = 0.6f))
+        )
+        // Progress
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(progress)
+                .height(4.dp)
+                .align(Alignment.CenterStart)
+                .background(Color.White)
+        )
+        // Thumb (optional, can add touch handling)
+    }
+}
+
+// ------------------------------------------------------------------------
+// Helper for vertical swipe detection
+// ------------------------------------------------------------------------
+fun Modifier.detectVerticalSwipes(
+    onSwipeUp: () -> Unit,
+    onSwipeDown: () -> Unit,
+    threshold: Float = 100f
+): Modifier = this.pointerInput(Unit) {
+    detectDragGestures(
+        onDragStart = { /* noop */ },
+        onDragEnd = { /* noop */ },
+        onDragCancel = { /* noop */ },
+        onDrag = { change, dragAmount ->
+            change.consume()
+            val (x, y) = dragAmount
+            if (abs(x) < abs(y) && abs(y) > threshold) {
+                if (y < 0) {
+                    onSwipeUp()
+                } else {
+                    onSwipeDown()
+                }
+            }
+        }
+    )
+}
+
+// ------------------------------------------------------------------------
+// Time formatting helper
+// ------------------------------------------------------------------------
+fun formatTime(ms: Long): String {
+    val totalSeconds = ms / 1000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) String.format("%02d:%02d:%02d", hours, minutes, seconds)
+    else String.format("%02d:%02d", minutes, seconds)
 }
