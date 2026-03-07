@@ -17,7 +17,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
-import android.system.Os
 import android.util.AttributeSet
 import android.util.Log
 import android.view.Gravity
@@ -150,6 +149,24 @@ class PlayerActivity : AppCompatActivity() {
         private const val LOG_FILE_NAME = "rtfp_crash_log.txt"
         private const val KEY_POSITION = "player_position"
         private const val DRAG_THRESHOLD = 10 // pixels
+    }
+
+    // ------------------------------------------------------------------------
+    // Fullscreen helper (defined BEFORE onCreate)
+    // ------------------------------------------------------------------------
+    private fun hideSystemUI() {
+        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            )
+        }
     }
 
     // ------------------------------------------------------------------------
