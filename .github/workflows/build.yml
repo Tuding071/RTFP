@@ -1,10 +1,4 @@
-name: 🚀 RTFP Auto-Generator & Builder
-
-# This SINGLE YML file will:
-# 1. Generate entire Android project from scratch
-# 2. Create all source files, manifests, gradle configs
-# 3. Build APK automatically
-# 4. Release it as artifact
+name: 🚀 RTFP Auto-Generator & Builder (Fixed)
 
 on:
   push:
@@ -21,7 +15,6 @@ jobs:
       
     - name: 🔧 Create Initial Gradle Files for Cache
       run: |
-        # Create minimal gradle files so cache can work
         mkdir -p gradle
         touch gradle.properties
         touch settings.gradle.kts
@@ -34,9 +27,8 @@ jobs:
         distribution: 'temurin'
         cache: gradle
         
-    - name: 🏗️ Generate Complete Project Structure
+    - name: 🏗️ Generate Project Structure
       run: |
-        # Create directory structure
         mkdir -p app/src/main/java/com/rtfp/player
         mkdir -p app/src/main/res/mipmap-mdpi
         mkdir -p app/src/main/res/mipmap-hdpi
@@ -45,39 +37,40 @@ jobs:
         mkdir -p app/src/main/res/mipmap-xxxhdpi
         mkdir -p app/src/main/res/values
         mkdir -p gradle/wrapper
-        
         echo "✅ Project structure created"
         
-    - name: 📝 Generate MainActivity.kt
+    - name: 📝 Generate MainActivity.kt (with permission handling)
       run: |
         cat > app/src/main/java/com/rtfp/player/MainActivity.kt << 'KOTLIN_EOF'
         package com.rtfp.player
         
         import android.app.Activity
         import android.content.Intent
+        import android.content.pm.PackageManager
         import android.net.Uri
+        import android.os.Build
         import android.os.Bundle
+        import android.provider.Settings
         import android.view.View
         import android.view.WindowManager
         import android.widget.FrameLayout
+        import android.widget.Toast
+        import androidx.core.app.ActivityCompat
+        import androidx.core.content.ContextCompat
         import `is`.xyz.mpv.MPVView
         
         class MainActivity : Activity() {
             private var mpvView: MPVView? = null
+            private val PERMISSION_REQUEST_CODE = 100
             
             override fun onCreate(savedInstanceState: Bundle?) {
                 super.onCreate(savedInstanceState)
                 
-                // Immersive fullscreen mode
                 enableImmersiveMode()
-                
-                // Keep screen on during playback
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 
-                // Create MPV view
                 mpvView = MPVView(this)
                 
-                // Setup container with center gravity
                 val container = FrameLayout(this).apply {
                     addView(mpvView, FrameLayout.LayoutParams(
                         FrameLayout.LayoutParams.MATCH_PARENT,
@@ -89,14 +82,42 @@ jobs:
                 
                 setContentView(container)
                 
-                // Initialize MPV
                 mpvView?.initialize(applicationInfo.nativeLibraryDir)
-                
-                // Configure MPV
                 configureMPV()
                 
-                // Handle intent
-                handleIntent(intent)
+                // Request permissions if needed
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED ||
+                        ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_MEDIA_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                        ActivityCompat.requestPermissions(this, 
+                            arrayOf(android.Manifest.permission.READ_MEDIA_VIDEO, android.Manifest.permission.READ_MEDIA_AUDIO), 
+                            PERMISSION_REQUEST_CODE)
+                    } else {
+                        handleIntent(intent)
+                    }
+                } else if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+                    if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                        ActivityCompat.requestPermissions(this, 
+                            arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE), 
+                            PERMISSION_REQUEST_CODE)
+                    } else {
+                        handleIntent(intent)
+                    }
+                } else {
+                    // Android 10-12: READ_EXTERNAL_STORAGE not strictly needed for media?
+                    handleIntent(intent)
+                }
+            }
+            
+            override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+                super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+                if (requestCode == PERMISSION_REQUEST_CODE) {
+                    if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
+                        handleIntent(intent)
+                    } else {
+                        Toast.makeText(this, "Permissions required to play videos", Toast.LENGTH_LONG).show()
+                    }
+                }
             }
             
             override fun onNewIntent(intent: Intent?) {
@@ -115,13 +136,14 @@ jobs:
                 videoUri?.let { uri ->
                     val path = when (uri.scheme) {
                         "content" -> {
-                            // Handle content:// URIs
+                            // Try to get file descriptor path, fallback to copying to cache
                             try {
                                 contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
                                     "/proc/self/fd/${pfd.fd}"
                                 }
                             } catch (e: Exception) {
-                                uri.toString()
+                                // If fd method fails, copy file to cache
+                                copyUriToCache(uri)
                             }
                         }
                         "file" -> uri.path
@@ -135,22 +157,27 @@ jobs:
                 }
             }
             
+            private fun copyUriToCache(uri: Uri): String? {
+                return try {
+                    val inputStream = contentResolver.openInputStream(uri) ?: return null
+                    val file = java.io.File(cacheDir, "video_${System.currentTimeMillis()}.mp4")
+                    file.outputStream().use { output ->
+                        inputStream.copyTo(output)
+                    }
+                    file.absolutePath
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    null
+                }
+            }
+            
             private fun configureMPV() {
                 mpvView?.apply {
-                    // Hardware decoding
                     command(arrayOf("set", "hwdec", "auto-safe"))
-                    
-                    // Video scaling - fit to screen
                     command(arrayOf("set", "keepaspect", "yes"))
                     command(arrayOf("set", "panscan", "0.0"))
-                    
-                    // Better quality
                     command(arrayOf("set", "scale", "bilinear"))
-                    
-                    // Sync
                     command(arrayOf("set", "video-sync", "audio"))
-                    
-                    // Cache
                     command(arrayOf("set", "cache", "yes"))
                     command(arrayOf("set", "demuxer-max-bytes", "150M"))
                 }
@@ -190,7 +217,6 @@ jobs:
             }
         }
         KOTLIN_EOF
-        
         echo "✅ MainActivity.kt generated"
         
     - name: 📄 Generate AndroidManifest.xml
@@ -228,7 +254,6 @@ jobs:
                         <category android:name="android.intent.category.LAUNCHER" />
                     </intent-filter>
                     
-                    <!-- View video files -->
                     <intent-filter>
                         <action android:name="android.intent.action.VIEW" />
                         <category android:name="android.intent.category.DEFAULT" />
@@ -236,7 +261,6 @@ jobs:
                         <data android:mimeType="video/*" />
                     </intent-filter>
                     
-                    <!-- All video formats -->
                     <intent-filter>
                         <action android:name="android.intent.action.VIEW" />
                         <category android:name="android.intent.category.DEFAULT" />
@@ -250,7 +274,6 @@ jobs:
                         <data android:mimeType="video/quicktime" />
                     </intent-filter>
                     
-                    <!-- Send video -->
                     <intent-filter>
                         <action android:name="android.intent.action.SEND" />
                         <category android:name="android.intent.category.DEFAULT" />
@@ -260,23 +283,17 @@ jobs:
             </application>
         </manifest>
         XML_EOF
-        
         echo "✅ AndroidManifest.xml generated"
         
-    - name: 🎨 Generate App Icon (Solid Color)
+    - name: 🎨 Generate App Icons
       run: |
-        # Install ImageMagick
         sudo apt-get update
         sudo apt-get install -y imagemagick
-        
-        # Generate solid color icon (teal/cyan - video player theme)
-        # Different sizes for different densities
         convert -size 48x48 xc:"#00BCD4" app/src/main/res/mipmap-mdpi/ic_launcher.png
         convert -size 72x72 xc:"#00BCD4" app/src/main/res/mipmap-hdpi/ic_launcher.png
         convert -size 96x96 xc:"#00BCD4" app/src/main/res/mipmap-xhdpi/ic_launcher.png
         convert -size 144x144 xc:"#00BCD4" app/src/main/res/mipmap-xxhdpi/ic_launcher.png
         convert -size 192x192 xc:"#00BCD4" app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
-        
         echo "✅ App icons generated"
         
     - name: 🎨 Generate strings.xml
@@ -287,10 +304,9 @@ jobs:
             <string name="app_name">RTFP</string>
         </resources>
         XML_EOF
-        
         echo "✅ strings.xml generated"
         
-    - name: 🔧 Generate app/build.gradle.kts
+    - name: 🔧 Generate app/build.gradle.kts (updated library)
       run: |
         cat > app/build.gradle.kts << 'GRADLE_EOF'
         plugins {
@@ -351,11 +367,10 @@ jobs:
         }
         
         dependencies {
-            // Using the latest version of mpv-android-lib
-            implementation("io.github.abdallahmehiz:mpv-android-lib:0.1.12")
+            implementation("io.github.abdallahmehiz:mpv-android-lib:0.1.14") // updated
+            implementation("androidx.core:core-ktx:1.12.0") // for permission helpers
         }
         GRADLE_EOF
-        
         echo "✅ app/build.gradle.kts generated"
         
     - name: 🔧 Generate ProGuard Rules
@@ -369,8 +384,10 @@ jobs:
         -keepclasseswithmembernames class * {
             native <methods>;
         }
-        PROGUARD_EOF
         
+        # Keep ParcelFileDescriptor (used in fd path)
+        -keep class android.os.ParcelFileDescriptor { *; }
+        PROGUARD_EOF
         echo "✅ proguard-rules.pro generated"
         
     - name: 🔧 Generate Root build.gradle.kts
@@ -381,7 +398,6 @@ jobs:
             id("org.jetbrains.kotlin.android") version "2.1.0" apply false
         }
         GRADLE_EOF
-        
         echo "✅ Root build.gradle.kts generated"
         
     - name: 🔧 Generate settings.gradle.kts
@@ -406,7 +422,6 @@ jobs:
         rootProject.name = "RTFP"
         include(":app")
         GRADLE_EOF
-        
         echo "✅ settings.gradle.kts generated"
         
     - name: 🔧 Generate gradle.properties
@@ -419,56 +434,53 @@ jobs:
         android.nonTransitiveRClass=true
         android.defaults.buildfeatures.buildconfig=true
         PROPS_EOF
-        
         echo "✅ gradle.properties generated"
         
     - name: 🔧 Download Gradle Wrapper
       run: |
-        # Download gradle wrapper
         wget https://services.gradle.org/distributions/gradle-8.11.1-bin.zip
         unzip -q gradle-8.11.1-bin.zip
-        
-        # Generate wrapper
         ./gradle-8.11.1/bin/gradle wrapper --gradle-version 8.11.1
-        
         chmod +x gradlew
-        
         echo "✅ Gradle wrapper configured"
-
         
-    - name: 🏗️ Build APK
+    - name: 🔍 List dependencies (debug)
       run: |
-        ./gradlew assembleRelease --no-daemon --stacktrace
+        ./gradlew app:dependencies --configuration releaseCompileClasspath
+      continue-on-error: true
         
-        echo "✅ APK built successfully!"
+    - name: 🏗️ Build APK with detailed logs
+      run: |
+        ./gradlew assembleRelease --no-daemon --stacktrace --info > build.log 2>&1 || true
+        echo "Build finished. Check build.log for details."
+        
+    - name: 📤 Upload build log
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log
+        path: build.log
         
     - name: 📦 Upload Universal APK
       uses: actions/upload-artifact@v4
       with:
         name: RTFP-universal
         path: app/build/outputs/apk/release/*-universal-release-unsigned.apk
+        if-no-files-found: warn
         
     - name: 📦 Upload All APKs
       uses: actions/upload-artifact@v4
       with:
         name: RTFP-all-apks
         path: app/build/outputs/apk/release/*.apk
+        if-no-files-found: warn
         
     - name: 🎉 Build Summary
       run: |
-        echo "## 🎬 RTFP Video Player Built Successfully! 🎉" >> $GITHUB_STEP_SUMMARY
+        echo "## 🎬 RTFP Video Player Build Attempt" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 📱 Features:" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Immersive fullscreen playback" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Auto-fit video to screen (maintains aspect ratio)" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Center gravity for perfect positioning" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Hardware acceleration enabled" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Opens from file managers" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Handles all video formats (mpv/ffmpeg)" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Proper lifecycle management" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Screen stays on during playback" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 📦 Generated APKs:" >> $GITHUB_STEP_SUMMARY
-        ls -lh app/build/outputs/apk/release/*.apk >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "Download from the Artifacts section above! 🚀" >> $GITHUB_STEP_SUMMARY
+        echo "Check the uploaded `build-log` artifact for compilation errors." >> $GITHUB_STEP_SUMMARY
+        if [ -f app/build/outputs/apk/release/*.apk ]; then
+          echo "✅ APKs generated successfully!" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ Build failed. See log for details." >> $GITHUB_STEP_SUMMARY
+        fi
