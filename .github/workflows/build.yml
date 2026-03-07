@@ -60,12 +60,10 @@ jobs:
         import android.view.View
         import android.view.WindowManager
         import android.widget.FrameLayout
-        import `is`.xyz.mpv.MPVLib
-        import `is`.xyz.mpv.MPVView
+        import io.github.abdallahmehiz.mpvandroidlib.MPVView
         
-        class MainActivity : Activity(), MPVLib.EventObserver {
-            private lateinit var mpvView: MPVView
-            private var videoUri: Uri? = null
+        class MainActivity : Activity() {
+            private var mpvView: MPVView? = null
             
             override fun onCreate(savedInstanceState: Bundle?) {
                 super.onCreate(savedInstanceState)
@@ -77,14 +75,10 @@ jobs:
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 
                 // Create MPV view
-                mpvView = MPVView(this, null)
+                mpvView = MPVView(this)
                 
-                // Setup container with center gravity and fit to screen
+                // Setup container with center gravity
                 val container = FrameLayout(this).apply {
-                    layoutParams = FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.MATCH_PARENT,
-                        FrameLayout.LayoutParams.MATCH_PARENT
-                    )
                     addView(mpvView, FrameLayout.LayoutParams(
                         FrameLayout.LayoutParams.MATCH_PARENT,
                         FrameLayout.LayoutParams.MATCH_PARENT
@@ -96,13 +90,12 @@ jobs:
                 setContentView(container)
                 
                 // Initialize MPV
-                mpvView.initialize(applicationInfo.nativeLibraryDir)
-                mpvView.addObserver(this)
+                mpvView?.initialize(applicationInfo.nativeLibraryDir)
                 
-                // Configure MPV for best playback
+                // Configure MPV
                 configureMPV()
                 
-                // Handle intent (file opened from file manager)
+                // Handle intent
                 handleIntent(intent)
             }
             
@@ -113,59 +106,54 @@ jobs:
             }
             
             private fun handleIntent(intent: Intent?) {
-                videoUri = when (intent?.action) {
+                val videoUri: Uri? = when (intent?.action) {
                     Intent.ACTION_VIEW -> intent.data
                     Intent.ACTION_SEND -> intent.getParcelableExtra(Intent.EXTRA_STREAM)
                     else -> null
                 }
                 
                 videoUri?.let { uri ->
-                    // Convert content:// URI to file path if needed
                     val path = when (uri.scheme) {
-                        "content" -> getRealPathFromURI(uri)
+                        "content" -> {
+                            // Handle content:// URIs
+                            try {
+                                contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                                    "/proc/self/fd/${pfd.fd}"
+                                }
+                            } catch (e: Exception) {
+                                uri.toString()
+                            }
+                        }
                         "file" -> uri.path
                         else -> uri.toString()
                     }
                     
                     path?.let {
-                        mpvView.command(arrayOf("loadfile", it))
-                        mpvView.command(arrayOf("set", "pause", "no"))
+                        mpvView?.command(arrayOf("loadfile", it))
+                        mpvView?.command(arrayOf("set", "pause", "no"))
                     }
                 }
             }
             
-            private fun getRealPathFromURI(uri: Uri): String? {
-                contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                    return "/proc/self/fd/${pfd.fd}"
-                }
-                return null
-            }
-            
             private fun configureMPV() {
-                // Hardware decoding
-                mpvView.command(arrayOf("set", "hwdec", "auto-safe"))
-                
-                // Video scaling - fit to screen maintaining aspect ratio
-                mpvView.command(arrayOf("set", "video-aspect-override", "no"))
-                mpvView.command(arrayOf("set", "keepaspect", "yes"))
-                mpvView.command(arrayOf("set", "panscan", "0.0"))
-                
-                // Auto-rotate based on video
-                mpvView.command(arrayOf("set", "video-rotate", "no"))
-                
-                // Better quality scaling
-                mpvView.command(arrayOf("set", "scale", "bilinear"))
-                mpvView.command(arrayOf("set", "dscale", "bilinear"))
-                
-                // Audio/video sync
-                mpvView.command(arrayOf("set", "video-sync", "audio"))
-                
-                // Cache for smooth playback
-                mpvView.command(arrayOf("set", "cache", "yes"))
-                mpvView.command(arrayOf("set", "demuxer-max-bytes", "150M"))
-                
-                // Skip display sync for lower latency
-                mpvView.command(arrayOf("set", "display-fps-override", "60"))
+                mpvView?.apply {
+                    // Hardware decoding
+                    command(arrayOf("set", "hwdec", "auto-safe"))
+                    
+                    // Video scaling - fit to screen
+                    command(arrayOf("set", "keepaspect", "yes"))
+                    command(arrayOf("set", "panscan", "0.0"))
+                    
+                    // Better quality
+                    command(arrayOf("set", "scale", "bilinear"))
+                    
+                    // Sync
+                    command(arrayOf("set", "video-sync", "audio"))
+                    
+                    // Cache
+                    command(arrayOf("set", "cache", "yes"))
+                    command(arrayOf("set", "demuxer-max-bytes", "150M"))
+                }
             }
             
             private fun enableImmersiveMode() {
@@ -181,39 +169,24 @@ jobs:
             
             override fun onWindowFocusChanged(hasFocus: Boolean) {
                 super.onWindowFocusChanged(hasFocus)
-                if (hasFocus) {
-                    enableImmersiveMode()
-                }
+                if (hasFocus) enableImmersiveMode()
             }
             
             override fun onResume() {
                 super.onResume()
-                mpvView.command(arrayOf("set", "pause", "no"))
+                mpvView?.command(arrayOf("set", "pause", "no"))
                 enableImmersiveMode()
             }
             
             override fun onPause() {
-                mpvView.command(arrayOf("set", "pause", "yes"))
+                mpvView?.command(arrayOf("set", "pause", "yes"))
                 super.onPause()
             }
             
             override fun onDestroy() {
-                mpvView.destroy()
+                mpvView?.destroy()
+                mpvView = null
                 super.onDestroy()
-            }
-            
-            // MPVLib.EventObserver implementation
-            override fun eventProperty(property: String) {}
-            override fun eventProperty(property: String, value: Long) {}
-            override fun eventProperty(property: String, value: Boolean) {}
-            override fun eventProperty(property: String, value: String) {}
-            override fun event(eventId: Int) {
-                when (eventId) {
-                    MPVLib.mpvEventId.MPV_EVENT_END_FILE -> {
-                        // Video ended, finish activity
-                        runOnUiThread { finish() }
-                    }
-                }
             }
         }
         KOTLIN_EOF
