@@ -17,6 +17,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
+import android.system.Os
 import android.util.AttributeSet
 import android.util.Log
 import android.view.Gravity
@@ -122,21 +123,8 @@ class PlayerActivity : AppCompatActivity() {
     private var savedPosition: Long = 0
 
     // ------------------------------------------------------------------------
-    // FFmpeg native methods
+    // FFmpeg native methods (declared external)
     // ------------------------------------------------------------------------
-    init {
-        val libLoadSuccess = try {
-            System.loadLibrary("ffmpeg_wrapper")
-            true
-        } catch (e: UnsatisfiedLinkError) {
-            logToFile("Failed to load native library: ${e.message}")
-            e.printStackTrace()
-            false
-        }
-        nativeLibraryLoaded = libLoadSuccess
-        logToFile("Native library loaded = $nativeLibraryLoaded")
-    }
-
     private external fun nativeOpenFile(path: String): Long
     private external fun nativeSeekTo(handle: Long, timestampUs: Long): Int
     private external fun nativeGetFrameAsBitmap(handle: Long): Bitmap?
@@ -165,20 +153,30 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     // ------------------------------------------------------------------------
-    // Fullscreen helper (works on all API levels)
+    // Native library loading with diagnostics
     // ------------------------------------------------------------------------
-    private fun hideSystemUI() {
-        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = (
-                View.SYSTEM_UI_FLAG_FULLSCREEN
-                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            )
+    private fun loadNativeLibrary(): Boolean {
+        return try {
+            // Try to find the library path
+            val abi = Build.SUPPORTED_ABIS.joinToString(", ")
+            logToFile("Device ABIs: $abi")
+
+            // Attempt to load
+            System.loadLibrary("ffmpeg_wrapper")
+            logToFile("Native library loaded successfully")
+            true
+        } catch (e: UnsatisfiedLinkError) {
+            logToFile("Failed to load native library: ${e.message}")
+            // Also log stack trace
+            val sw = StringWriter()
+            val pw = PrintWriter(sw)
+            e.printStackTrace(pw)
+            logToFile(sw.toString())
+            false
+        } catch (e: Exception) {
+            logToFile("Unexpected error loading native library: ${e.message}")
+            e.printStackTrace()
+            false
         }
     }
 
@@ -210,6 +208,9 @@ class PlayerActivity : AppCompatActivity() {
 
         try {
             super.onCreate(savedInstanceState)
+
+            // Load native library
+            nativeLibraryLoaded = loadNativeLibrary()
 
             // Make the activity fullscreen
             hideSystemUI()
