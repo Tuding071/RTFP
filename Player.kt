@@ -120,6 +120,7 @@ class PlayerActivity : AppCompatActivity() {
     private var videoUri: Uri? = null
     private var nativeLibraryLoaded = false
     private var savedPosition: Long = 0
+    private var surfaceAttached = true  // whether ExoPlayer owns the surface
 
     // ------------------------------------------------------------------------
     // FFmpeg native methods (byte array version)
@@ -151,6 +152,25 @@ class PlayerActivity : AppCompatActivity() {
         private const val LOG_FILE_NAME = "rtfp_crash_log.txt"
         private const val KEY_POSITION = "player_position"
         private const val DRAG_THRESHOLD = 10
+    }
+
+    // ------------------------------------------------------------------------
+    // Surface management
+    // ------------------------------------------------------------------------
+    private fun detachSurface() {
+        if (surfaceAttached) {
+            exoPlayer?.clearVideoSurface()
+            surfaceAttached = false
+            logToFile("Surface detached from ExoPlayer")
+        }
+    }
+
+    private fun reattachSurface() {
+        if (!surfaceAttached && surfaceView.holder.surface?.isValid == true) {
+            exoPlayer?.setVideoSurface(surfaceView.holder.surface)
+            surfaceAttached = true
+            logToFile("Surface reattached to ExoPlayer")
+        }
     }
 
     // ------------------------------------------------------------------------
@@ -195,7 +215,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     // ------------------------------------------------------------------------
-    // Activity lifecycle (unchanged)
+    // Activity lifecycle
     // ------------------------------------------------------------------------
     override fun onCreate(savedInstanceState: Bundle?) {
         logFile = File(cacheDir, LOG_FILE_NAME)
@@ -405,6 +425,10 @@ class PlayerActivity : AppCompatActivity() {
                 }
             }
         }
+        // Ensure surface is reattached if needed
+        if (!surfaceAttached && surfaceView.holder.surface?.isValid == true) {
+            reattachSurface()
+        }
         hideSystemUI()
     }
 
@@ -429,6 +453,7 @@ class PlayerActivity : AppCompatActivity() {
             exoPlayer = null
             logToFile("ExoPlayer released")
         }
+        surfaceAttached = false
     }
 
     // ------------------------------------------------------------------------
@@ -601,7 +626,12 @@ class PlayerActivity : AppCompatActivity() {
             surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
                 override fun surfaceCreated(holder: SurfaceHolder) {
                     logToFile("Surface created")
-                    setVideoSurface(holder.surface)
+                    if (surfaceAttached) {
+                        setVideoSurface(holder.surface)
+                    } else {
+                        // Surface recreated while detached – just remember it, we'll attach later
+                        logToFile("Surface created while detached")
+                    }
                 }
                 override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, hh: Int) {
                     logToFile("Surface changed: ${w}x$hh")
@@ -609,6 +639,7 @@ class PlayerActivity : AppCompatActivity() {
                 override fun surfaceDestroyed(holder: SurfaceHolder) {
                     logToFile("Surface destroyed")
                     clearVideoSurface()
+                    surfaceAttached = false
                 }
             })
 
@@ -629,6 +660,7 @@ class PlayerActivity : AppCompatActivity() {
                 }
             })
         }
+        surfaceAttached = true
     }
 
     // ------------------------------------------------------------------------
@@ -714,6 +746,7 @@ class PlayerActivity : AppCompatActivity() {
             return
         }
         exoPlayer?.pause()
+        detachSurface()  // Release surface from ExoPlayer
         isFfmpegMode = true
         debugOverlay.visibility = View.VISIBLE
         ffmpegIndicator.visibility = View.VISIBLE
@@ -789,6 +822,11 @@ class PlayerActivity : AppCompatActivity() {
             logToFile("Surface invalid or null")
             return
         }
+        // Ensure we own the surface
+        if (surfaceAttached) {
+            logToFile("Surface still attached to ExoPlayer, cannot draw")
+            return
+        }
         var canvas: Canvas? = null
         try {
             canvas = surface.lockCanvas(null)
@@ -806,7 +844,6 @@ class PlayerActivity : AppCompatActivity() {
             surface.unlockCanvasAndPost(canvas)
         } catch (e: IllegalArgumentException) {
             logToFile("IllegalArgumentException in draw: ${e.message ?: "null message"}")
-            // Log full stack trace
             val sw = StringWriter()
             val pw = PrintWriter(sw)
             e.printStackTrace(pw)
@@ -832,6 +869,7 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun exitFfmpegSeekMode() {
         isFfmpegMode = false
+        reattachSurface()  // Give surface back to ExoPlayer
     }
 
     private fun updateOverlayTime(ms: Long) {
