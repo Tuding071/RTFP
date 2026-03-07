@@ -92,7 +92,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
-import android.graphics.Color as AwtColor  // Rename to avoid conflict with Compose Color
+import android.graphics.Color as AwtColor
 
 // ------------------------------------------------------------------------
 // AspectRatioSurfaceView
@@ -133,7 +133,7 @@ class AspectRatioSurfaceView @JvmOverloads constructor(
 }
 
 // ------------------------------------------------------------------------
-// PlayerActivity with Compose overlay
+// PlayerActivity
 // ------------------------------------------------------------------------
 class PlayerActivity : AppCompatActivity() {
 
@@ -142,7 +142,7 @@ class PlayerActivity : AppCompatActivity() {
     private var errorLogVisible by mutableStateOf(false)
     private var logText by mutableStateOf("")
 
-    // Player state (make isPlaying public so Compose can access it)
+    // Player state
     var isPlaying = false
         private set
 
@@ -547,7 +547,6 @@ class PlayerActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         logFile = File(cacheDir, LOG_FILE_NAME)
 
-        // Set uncaught exception handler
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             logToFile("*** CRASH *** Thread: ${thread.name}")
@@ -564,7 +563,6 @@ class PlayerActivity : AppCompatActivity() {
             logToFile("Restored position: $savedPosition")
         }
 
-        // Create SurfaceView
         surfaceView = AspectRatioSurfaceView(this).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -573,17 +571,14 @@ class PlayerActivity : AppCompatActivity() {
             setBackgroundColor(AwtColor.BLACK)
         }
 
-        // Set Compose content
         setContent {
             MaterialTheme {
                 Box(modifier = Modifier.fillMaxSize()) {
-                    // AndroidView to host SurfaceView
                     AndroidView(
                         factory = { surfaceView },
                         modifier = Modifier.fillMaxSize()
                     )
 
-                    // Overlay with gestures and UI
                     PlayerOverlay(
                         player = this@PlayerActivity,
                         logText = logText,
@@ -657,7 +652,7 @@ class PlayerActivity : AppCompatActivity() {
 }
 
 // ------------------------------------------------------------------------
-// Compose Overlay
+// Compose Overlay (simplified with separate gesture detectors)
 // ------------------------------------------------------------------------
 @Composable
 fun PlayerOverlay(
@@ -671,7 +666,6 @@ fun PlayerOverlay(
     val configuration = LocalConfiguration.current
     val screenWidthPx = with(LocalDensity.current) { configuration.screenWidthDp.dp.toPx() }
 
-    // Gesture state
     var isLongPressing by remember { mutableStateOf(false) }
     var isDragging by remember { mutableStateOf(false) }
     var dragStartX by remember { mutableFloatStateOf(0f) }
@@ -679,11 +673,6 @@ fun PlayerOverlay(
     var currentDragPositionMs by remember { mutableLongStateOf(0L) }
     var wasPlayingBeforeDrag by remember { mutableStateOf(false) }
 
-    // For long press detection
-    var isDown by remember { mutableStateOf(false) }
-    var gestureActive by remember { mutableStateOf(false) } // true if drag or vertical swipe started
-
-    // UI state
     var showSeekbar by remember { mutableStateOf(true) }
     var showTimeOverlay by remember { mutableStateOf(false) }
     var seekTargetTime by remember { mutableStateOf("") }
@@ -693,7 +682,6 @@ fun PlayerOverlay(
     var feedbackText by remember { mutableStateOf("") }
     var showFeedback by remember { mutableStateOf(false) }
 
-    // Update time periodically
     LaunchedEffect(Unit) {
         while (isActive) {
             if (!isDragging) {
@@ -706,7 +694,6 @@ fun PlayerOverlay(
         }
     }
 
-    // Hide seekbar after inactivity
     LaunchedEffect(showSeekbar) {
         if (showSeekbar) {
             delay(4000)
@@ -714,7 +701,6 @@ fun PlayerOverlay(
         }
     }
 
-    // Long press speed control
     LaunchedEffect(isLongPressing) {
         if (isLongPressing) {
             player.setSpeed(2.0f)
@@ -723,29 +709,64 @@ fun PlayerOverlay(
         }
     }
 
-    // Long press timer
-    LaunchedEffect(isDown, gestureActive) {
-        if (isDown && !gestureActive) {
-            delay(300)
-            if (isDown && !gestureActive) {
-                isLongPressing = true
-            }
-        } else {
-            isLongPressing = false
-        }
-    }
-
     Box(modifier = modifier) {
-        // Gesture area
+        // Gesture area – combine multiple detectors using a single pointerInput with nested calls
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
+                    // Tap and long press
+                    detectTapGestures(
+                        onTap = {
+                            player.togglePlayPause()
+                            feedbackText = if (player.isPlaying) "Play" else "Pause"
+                            showFeedback = true
+                            scope.launch {
+                                delay(1000)
+                                showFeedback = false
+                            }
+                        },
+                        onLongPress = {
+                            isLongPressing = true
+                        }
+                    )
+                }
+                .pointerInput(Unit) {
+                    // Horizontal drag
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            dragStartX = offset.x
+                            dragStartPositionMs = player.getCurrentPosition()
+                            wasPlayingBeforeDrag = player.isPlaying
+                            player.startFfmpegSeekMode()
+                            isDragging = true
+                            showSeekbar = true
+                        },
+                        onDrag = { change, _ ->
+                            val deltaX = change.position.x - dragStartX
+                            val deltaMs = (deltaX / screenWidthPx * player.getDuration()).toLong()
+                            val newPos = (dragStartPositionMs + deltaMs).coerceIn(0, player.getDuration())
+                            if (newPos != currentDragPositionMs) {
+                                currentDragPositionMs = newPos
+                                player.updateFfmpegFrame(newPos)
+                                seekTargetTime = formatTime(newPos)
+                                showTimeOverlay = true
+                                seekDirection = if (deltaX > 0) "+" else "-"
+                            }
+                        },
+                        onDragEnd = {
+                            player.endFfmpegSeekMode(currentDragPositionMs)
+                            isDragging = false
+                            showTimeOverlay = false
+                        }
+                    )
+                }
+                .pointerInput(Unit) {
+                    // Vertical swipe detection
                     val swipeThreshold = 100f
                     var downX = 0f
                     var downY = 0f
-                    var dragActive = false
-                    var verticalSwipeActive = false
+                    var isVerticalSwipeActive = false
 
                     awaitPointerEventScope {
                         while (true) {
@@ -753,35 +774,15 @@ fun PlayerOverlay(
                             event.changes.forEach { change ->
                                 when {
                                     change.pressed && change.id == PointerId(0) -> {
-                                        // Primary pointer down
                                         if (change.previousPressed == false) {
                                             downX = change.position.x
                                             downY = change.position.y
-                                            dragActive = false
-                                            verticalSwipeActive = false
-                                            isDown = true
-                                            gestureActive = false
+                                            isVerticalSwipeActive = false
                                         }
-
-                                        // Move handling
-                                        val deltaX = change.position.x - downX
-                                        val deltaY = change.position.y - downY
-                                        if (!dragActive && !verticalSwipeActive) {
-                                            // Determine gesture type
-                                            if (abs(deltaX) > abs(deltaY) && abs(deltaX) > 20) {
-                                                // Horizontal drag started
-                                                dragActive = true
-                                                gestureActive = true
-                                                dragStartX = downX
-                                                dragStartPositionMs = player.getCurrentPosition()
-                                                wasPlayingBeforeDrag = player.isPlaying
-                                                player.startFfmpegSeekMode()
-                                                isDragging = true
-                                                showSeekbar = true
-                                            } else if (abs(deltaY) > abs(deltaX) && abs(deltaY) > swipeThreshold) {
-                                                // Vertical swipe
-                                                verticalSwipeActive = true
-                                                gestureActive = true
+                                        if (!isVerticalSwipeActive) {
+                                            val deltaY = change.position.y - downY
+                                            if (abs(deltaY) > swipeThreshold && abs(change.position.x - downX) < 100) {
+                                                isVerticalSwipeActive = true
                                                 if (deltaY < 0) {
                                                     val newPos = (player.getCurrentPosition() + 5000).coerceAtMost(player.getDuration())
                                                     player.seekTo(newPos)
@@ -798,44 +799,6 @@ fun PlayerOverlay(
                                                 }
                                             }
                                         }
-
-                                        // Ongoing drag
-                                        if (dragActive) {
-                                            val deltaMs = ((change.position.x - dragStartX) / screenWidthPx * player.getDuration()).toLong()
-                                            val newPos = (dragStartPositionMs + deltaMs).coerceIn(0, player.getDuration())
-                                            if (newPos != currentDragPositionMs) {
-                                                currentDragPositionMs = newPos
-                                                player.updateFfmpegFrame(newPos)
-                                                seekTargetTime = formatTime(newPos)
-                                                showTimeOverlay = true
-                                                seekDirection = if (deltaX > 0) "+" else "-"
-                                            }
-                                        }
-                                    }
-
-                                    !change.pressed && change.id == PointerId(0) -> {
-                                        // Primary pointer up
-                                        if (dragActive) {
-                                            player.endFfmpegSeekMode(currentDragPositionMs)
-                                            isDragging = false
-                                            showTimeOverlay = false
-                                        } else if (!verticalSwipeActive) {
-                                            // Check for tap (short press)
-                                            val deltaX = change.position.x - downX
-                                            val deltaY = change.position.y - downY
-                                            val duration = System.currentTimeMillis() - (event.changes.firstOrNull()?.uptimeMillis ?: 0)
-                                            if (duration < 500 && abs(deltaX) < 20 && abs(deltaY) < 20) {
-                                                player.togglePlayPause()
-                                                feedbackText = if (player.isPlaying) "Play" else "Pause"
-                                                showFeedback = true
-                                                scope.launch {
-                                                    delay(1000)
-                                                    showFeedback = false
-                                                }
-                                            }
-                                        }
-                                        isDown = false
-                                        gestureActive = false
                                     }
                                 }
                                 change.consume()
@@ -933,7 +896,6 @@ fun PlayerOverlay(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Seek bar
                     SimpleSeekBar(
                         position = if (isDragging) currentDragPositionMs.toFloat() else player.getCurrentPosition().toFloat(),
                         duration = player.getDuration().toFloat(),
@@ -978,9 +940,6 @@ fun PlayerOverlay(
     }
 }
 
-// ------------------------------------------------------------------------
-// Simple Seek Bar (draggable)
-// ------------------------------------------------------------------------
 @Composable
 fun SimpleSeekBar(
     position: Float,
@@ -989,7 +948,6 @@ fun SimpleSeekBar(
 ) {
     val progress = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f
     Box(modifier = modifier) {
-        // Background
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -997,7 +955,6 @@ fun SimpleSeekBar(
                 .align(Alignment.CenterStart)
                 .background(Color.Gray.copy(alpha = 0.6f))
         )
-        // Progress
         Box(
             modifier = Modifier
                 .fillMaxWidth(progress)
@@ -1005,13 +962,9 @@ fun SimpleSeekBar(
                 .align(Alignment.CenterStart)
                 .background(Color.White)
         )
-        // Thumb (optional, can add touch handling)
     }
 }
 
-// ------------------------------------------------------------------------
-// Time formatting helper
-// ------------------------------------------------------------------------
 fun formatTime(ms: Long): String {
     val totalSeconds = ms / 1000
     val hours = totalSeconds / 3600
