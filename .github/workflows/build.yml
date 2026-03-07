@@ -100,7 +100,7 @@ jobs:
           }
           EOF
 
-          # AndroidManifest.xml with intent filters
+          # AndroidManifest.xml
           cat > app/src/main/AndroidManifest.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
@@ -383,22 +383,22 @@ jobs:
 
       - name: Build native wrapper library for arm64-v8a
         run: |
-         export NDK_DIR=$(ls -d $ANDROID_HOME/ndk/* | head -n1)
-         export TOOLCHAIN=$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64
-         export ABI="arm64-v8a"
-         export TRIPLE="aarch64-linux-android"
-         export API_LEVEL=21
-         
-         $TOOLCHAIN/bin/${TRIPLE}${API_LEVEL}-clang \
-         -I ffmpeg_src/install/$ABI/include \
-         -L ffmpeg_src/install/$ABI/lib \
-         -shared -o libffmpeg_wrapper.so ffmpeg_wrapper.c \
-         -static-libstdc++ \
-         -Wl,--no-undefined \
-         -lavformat -lavcodec -lavutil -lswscale \
-         -landroid -lz -lm
+          export NDK_DIR=$(ls -d $ANDROID_HOME/ndk/* | head -n1)
+          export TOOLCHAIN=$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64
+          export ABI="arm64-v8a"
+          export TRIPLE="aarch64-linux-android"
+          export API_LEVEL=21
 
-         mv libffmpeg_wrapper.so app/src/main/jniLibs/$ABI/
+          $TOOLCHAIN/bin/${TRIPLE}${API_LEVEL}-clang \
+            ffmpeg_wrapper.c \
+            -I ffmpeg_src/install/$ABI/include \
+            -L ffmpeg_src/install/$ABI/lib \
+            --sysroot=$TOOLCHAIN/sysroot \
+            -shared -o libffmpeg_wrapper.so \
+            -Wl,--no-undefined \
+            -lavformat -lavcodec -lavutil -lswscale -landroid -lz -lm
+
+          mv libffmpeg_wrapper.so app/src/main/jniLibs/$ABI/
 
       - name: Build APK
         run: gradle assembleDebug
