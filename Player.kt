@@ -8,7 +8,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.net.Uri
@@ -29,8 +28,6 @@ import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -70,6 +67,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
@@ -93,6 +91,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
+import android.graphics.Color as AwtColor  // Rename to avoid conflict
 
 // ------------------------------------------------------------------------
 // AspectRatioSurfaceView
@@ -142,9 +141,11 @@ class PlayerActivity : AppCompatActivity() {
     private var errorLogVisible by mutableStateOf(false)
     private var logText by mutableStateOf("")
 
-    // Player state
+    // Player state (make isPlaying public so Compose can access it)
+    var isPlaying = false
+        private set
+
     private var exoPlayer: ExoPlayer? = null
-    private var isPlaying = false
     private var videoUri: Uri? = null
     private var nativeLibraryLoaded = false
     private var savedPosition: Long = 0
@@ -568,6 +569,7 @@ class PlayerActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
+            setBackgroundColor(AwtColor.BLACK)  // Use renamed AwtColor
         }
 
         // Set Compose content
@@ -575,7 +577,7 @@ class PlayerActivity : AppCompatActivity() {
             MaterialTheme {
                 Box(modifier = Modifier.fillMaxSize()) {
                     // AndroidView to host SurfaceView
-                    androidx.compose.ui.viewinterop.AndroidView(
+                    AndroidView(
                         factory = { surfaceView },
                         modifier = Modifier.fillMaxSize()
                     )
@@ -717,81 +719,140 @@ fun PlayerOverlay(
         }
     }
 
-    // Main gesture area
+    // Main gesture area – using a single Box with pointerInput that handles all gestures
     Box(modifier = modifier) {
-        // Transparent overlay for gestures
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = {
-                            player.togglePlayPause()
-                            showFeedback = true
-                            feedbackText = if (player.isPlaying) "Play" else "Pause"
-                            scope.launch {
-                                delay(1000)
-                                showFeedback = false
+                    // We'll use a single pointerInput to handle all gestures:
+                    // tap, long press, drag (horizontal seeking), and vertical swipes.
+                    // We'll track events manually.
+                    var downTime = 0L
+                    var downX = 0f
+                    var downY = 0f
+                    var isLongPressTriggered = false
+                    var isDragActive = false
+                    var isVerticalSwipeActive = false
+                    val longPressDelay = 300L
+                    val swipeThreshold = 100f
+
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            event.changes.forEach { change ->
+                                when (change.pressed) {
+                                    true -> {
+                                        // Down event
+                                        if (change.id == 0) { // primary pointer
+                                            downTime = System.currentTimeMillis()
+                                            downX = change.position.x
+                                            downY = change.position.y
+                                            isLongPressTriggered = false
+                                            isDragActive = false
+                                            isVerticalSwipeActive = false
+                                            // Start long press timer
+                                            launch {
+                                                delay(longPressDelay)
+                                                if (!isDragActive && !isVerticalSwipeActive) {
+                                                    isLongPressTriggered = true
+                                                    isLongPressing = true
+                                                }
+                                            }
+                                        }
+                                    }
+                                    false -> {
+                                        // Up event
+                                        if (change.id == 0) {
+                                            val upX = change.position.x
+                                            val upY = change.position.y
+                                            val deltaX = upX - downX
+                                            val deltaY = upY - downY
+                                            val duration = System.currentTimeMillis() - downTime
+
+                                            if (isLongPressTriggered) {
+                                                // Long press ended – reset speed
+                                                isLongPressing = false
+                                            } else if (isDragActive) {
+                                                // Drag ended
+                                                player.endFfmpegSeekMode(currentDragPositionMs)
+                                                isDragging = false
+                                                showTimeOverlay = false
+                                            } else if (isVerticalSwipeActive) {
+                                                // Vertical swipe already handled during move
+                                                isVerticalSwipeActive = false
+                                            } else if (duration < 500 && abs(deltaX) < 20 && abs(deltaY) < 20) {
+                                                // Short tap
+                                                player.togglePlayPause()
+                                                showFeedback = true
+                                                feedbackText = if (player.isPlaying) "Play" else "Pause"
+                                                scope.launch {
+                                                    delay(1000)
+                                                    showFeedback = false
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Handle move
+                                if (change.pressed && change.id == 0) {
+                                    val currentX = change.position.x
+                                    val currentY = change.position.y
+                                    val deltaX = currentX - downX
+                                    val deltaY = currentY - downY
+                                    val screenWidthPx = with(LocalDensity.current) { screenWidth.toPx() }
+
+                                    // Determine gesture type if not already decided
+                                    if (!isDragActive && !isVerticalSwipeActive && !isLongPressTriggered) {
+                                        if (abs(deltaX) > abs(deltaY) && abs(deltaX) > 20) {
+                                            // Horizontal drag
+                                            isDragActive = true
+                                            dragStartX = downX
+                                            dragStartPositionMs = player.getCurrentPosition()
+                                            wasPlayingBeforeDrag = player.isPlaying
+                                            player.startFfmpegSeekMode()
+                                            isDragging = true
+                                            showSeekbar = true
+                                        } else if (abs(deltaY) > abs(deltaX) && abs(deltaY) > swipeThreshold) {
+                                            // Vertical swipe
+                                            isVerticalSwipeActive = true
+                                            if (deltaY < 0) {
+                                                // Swipe up
+                                                val newPos = (player.getCurrentPosition() + 5000).coerceAtMost(player.getDuration())
+                                                player.seekTo(newPos)
+                                                feedbackText = "+5s"
+                                            } else {
+                                                // Swipe down
+                                                val newPos = (player.getCurrentPosition() - 5000).coerceAtLeast(0)
+                                                player.seekTo(newPos)
+                                                feedbackText = "-5s"
+                                            }
+                                            showFeedback = true
+                                            scope.launch {
+                                                delay(1000)
+                                                showFeedback = false
+                                            }
+                                        }
+                                    }
+
+                                    // Handle ongoing drag
+                                    if (isDragActive) {
+                                        val deltaMs = ((currentX - dragStartX) / screenWidthPx * player.getDuration()).toLong()
+                                        val newPos = (dragStartPositionMs + deltaMs).coerceIn(0, player.getDuration())
+                                        if (newPos != currentDragPositionMs) {
+                                            currentDragPositionMs = newPos
+                                            player.updateFfmpegFrame(newPos)
+                                            seekTargetTime = formatTime(newPos)
+                                            showTimeOverlay = true
+                                            seekDirection = if (deltaX > 0) "+" else "-"
+                                        }
+                                    }
+                                }
+                                change.consume()
                             }
-                        },
-                        onLongPress = {
-                            isLongPressing = true
                         }
-                    )
-                }
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { offset ->
-                            dragStartX = offset.x
-                            dragStartPositionMs = player.getCurrentPosition()
-                            wasPlayingBeforeDrag = player.isPlaying
-                            player.startFfmpegSeekMode()
-                            isDragging = true
-                            showSeekbar = true // Keep visible during drag
-                        },
-                        onDrag = { change, dragAmount ->
-                            val deltaX = change.position.x - dragStartX
-                            val screenWidthPx = with(LocalDensity.current) { screenWidth.toPx() }
-                            val deltaMs = (deltaX / screenWidthPx * player.getDuration()).toLong()
-                            val newPos = (dragStartPositionMs + deltaMs).coerceIn(0, player.getDuration())
-                            if (newPos != currentDragPositionMs) {
-                                currentDragPositionMs = newPos
-                                player.updateFfmpegFrame(newPos)
-                                seekTargetTime = formatTime(newPos)
-                                showTimeOverlay = true
-                                seekDirection = if (deltaX > 0) "+" else "-"
-                            }
-                        },
-                        onDragEnd = {
-                            player.endFfmpegSeekMode(currentDragPositionMs)
-                            isDragging = false
-                            showTimeOverlay = false
-                        }
-                    )
-                }
-                .pointerInput(Unit) {
-                    detectVerticalSwipes(
-                        onSwipeUp = {
-                            val newPos = (player.getCurrentPosition() + 5000).coerceAtMost(player.getDuration())
-                            player.seekTo(newPos)
-                            feedbackText = "+5s"
-                            showFeedback = true
-                            scope.launch {
-                                delay(1000)
-                                showFeedback = false
-                            }
-                        },
-                        onSwipeDown = {
-                            val newPos = (player.getCurrentPosition() - 5000).coerceAtLeast(0)
-                            player.seekTo(newPos)
-                            feedbackText = "-5s"
-                            showFeedback = true
-                            scope.launch {
-                                delay(1000)
-                                showFeedback = false
-                            }
-                        }
-                    )
+                    }
                 }
         )
 
@@ -958,32 +1019,6 @@ fun SimpleSeekBar(
         )
         // Thumb (optional, can add touch handling)
     }
-}
-
-// ------------------------------------------------------------------------
-// Helper for vertical swipe detection
-// ------------------------------------------------------------------------
-fun Modifier.detectVerticalSwipes(
-    onSwipeUp: () -> Unit,
-    onSwipeDown: () -> Unit,
-    threshold: Float = 100f
-): Modifier = this.pointerInput(Unit) {
-    detectDragGestures(
-        onDragStart = { /* noop */ },
-        onDragEnd = { /* noop */ },
-        onDragCancel = { /* noop */ },
-        onDrag = { change, dragAmount ->
-            change.consume()
-            val (x, y) = dragAmount
-            if (abs(x) < abs(y) && abs(y) > threshold) {
-                if (y < 0) {
-                    onSwipeUp()
-                } else {
-                    onSwipeDown()
-                }
-            }
-        }
-    )
 }
 
 // ------------------------------------------------------------------------
