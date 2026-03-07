@@ -750,7 +750,7 @@ fun PlayerOverlay(
                                             verticalSwipeActive = false
                                             // Start long press detection
                                             longPressJob?.cancel()
-                                            longPressJob = launch {
+                                            longPressJob = this.launch {
                                                 delay(longPressTimeout)
                                                 if (!dragActive && !verticalSwipeActive) {
                                                     isLongPressing = true
