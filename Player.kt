@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -643,13 +642,14 @@ class PlayerActivity : AppCompatActivity() {
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.x - dragStartX
-                    if (!isDragging && kotlin.math.abs(dx) > DRAG_THRESHOLD) {
+                    val duration = exoPlayer?.duration ?: 0
+                    if (!isDragging && kotlin.math.abs(dx) > DRAG_THRESHOLD && duration > 0) {
                         isDragging = true
                         startFfmpegSeekMode()
                     }
-                    if (isDragging) {
+                    if (isDragging && duration > 0) {
                         val deltaMs = (dx / 100f * 1000).toLong()
-                        val newPos = (dragStartPositionMs + deltaMs).coerceIn(0, exoPlayer?.duration ?: 0)
+                        val newPos = (dragStartPositionMs + deltaMs).coerceIn(0, duration)
                         if (newPos != currentDragPositionMs) {
                             currentDragPositionMs = newPos
                             val success = updateFfmpegFrame(currentDragPositionMs * 1000)
@@ -721,14 +721,43 @@ class PlayerActivity : AppCompatActivity() {
             if (result == 0) {
                 val rgba = nativeGetFrameRGBA(ffmpegHandle)
                 if (rgba != null && videoWidth > 0 && videoHeight > 0) {
-                    logToFile("Frame size: ${rgba.size}, expected: ${videoWidth * videoHeight * 4}")
-                    val bitmap = Bitmap.createBitmap(videoWidth, videoHeight, Bitmap.Config.ARGB_8888)
-                    val buffer = ByteBuffer.wrap(rgba)
-                    buffer.order(ByteOrder.nativeOrder())
-                    bitmap.copyPixelsFromBuffer(buffer)
-                    drawBitmapOnSurface(bitmap)
-                    bitmap.recycle()
-                    true
+                    val expectedSize = videoWidth * videoHeight * 4
+                    logToFile("Frame size: ${rgba.size}, expected: $expectedSize")
+                    if (rgba.size != expectedSize) {
+                        logToFile("Size mismatch, abort")
+                        return false
+                    }
+                    // Try creating bitmap with buffer copy
+                    try {
+                        val bitmap = Bitmap.createBitmap(videoWidth, videoHeight, Bitmap.Config.ARGB_8888)
+                        val buffer = ByteBuffer.wrap(rgba).order(ByteOrder.nativeOrder())
+                        bitmap.copyPixelsFromBuffer(buffer)
+                        drawBitmapOnSurface(bitmap)
+                        bitmap.recycle()
+                        true
+                    } catch (e: Exception) {
+                        logToFile("Bitmap creation/draw exception: ${e.javaClass.simpleName} - ${e.message}")
+                        // Fallback: try using setPixels (slower but may work)
+                        try {
+                            val bitmap = Bitmap.createBitmap(videoWidth, videoHeight, Bitmap.Config.ARGB_8888)
+                            val pixels = IntArray(videoWidth * videoHeight)
+                            // Convert RGBA to ARGB
+                            for (i in pixels.indices) {
+                                val r = rgba[i * 4].toInt() and 0xFF
+                                val g = rgba[i * 4 + 1].toInt() and 0xFF
+                                val b = rgba[i * 4 + 2].toInt() and 0xFF
+                                val a = rgba[i * 4 + 3].toInt() and 0xFF
+                                pixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
+                            }
+                            bitmap.setPixels(pixels, 0, videoWidth, 0, 0, videoWidth, videoHeight)
+                            drawBitmapOnSurface(bitmap)
+                            bitmap.recycle()
+                            true
+                        } catch (e2: Exception) {
+                            logToFile("Fallback also failed: ${e2.message}")
+                            false
+                        }
+                    }
                 } else {
                     logToFile("Invalid frame data: rgba=${rgba != null}, w=$videoWidth, h=$videoHeight")
                     false
@@ -754,7 +783,7 @@ class PlayerActivity : AppCompatActivity() {
             canvas.drawBitmap(bitmap, null, Rect(0, 0, canvas.width, canvas.height), null)
             surface.unlockCanvasAndPost(canvas)
         } catch (e: Exception) {
-            logToFile("Draw exception: ${e.message}")
+            logToFile("Draw exception: ${e.javaClass.simpleName} - ${e.message}")
         }
     }
 
