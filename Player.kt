@@ -98,6 +98,7 @@ class PlayerActivity : AppCompatActivity() {
     // ------------------------------------------------------------------------
     private lateinit var surfaceView: AspectRatioSurfaceView
     private lateinit var debugOverlay: TextView
+    private lateinit var ffmpegIndicator: TextView   // shows when FFmpeg mode is active
     private lateinit var errorLogView: ScrollView
     private lateinit var errorLogText: TextView
     private lateinit var copyErrorButton: Button
@@ -234,6 +235,7 @@ class PlayerActivity : AppCompatActivity() {
             }
             root.addView(surfaceView)
 
+            // Debug overlay (current time during seek)
             debugOverlay = TextView(this).apply {
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -247,6 +249,22 @@ class PlayerActivity : AppCompatActivity() {
                 visibility = View.GONE
             }
             root.addView(debugOverlay)
+
+            // FFmpeg indicator (visible during seek)
+            ffmpegIndicator = TextView(this).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    gravity = Gravity.TOP or Gravity.END
+                    topMargin = 50
+                    rightMargin = 50
+                }
+                setTextColor(Color.GREEN)
+                text = "FFmpeg"
+                visibility = View.GONE
+            }
+            root.addView(ffmpegIndicator)
 
             // Error log view
             errorLogText = TextView(this).apply {
@@ -552,11 +570,14 @@ class PlayerActivity : AppCompatActivity() {
                     ffmpegHandle = nativeOpenFile(file.absolutePath)
                     if (ffmpegHandle == 0L) {
                         logToFile("nativeOpenFile returned 0 (failure)")
+                        Toast.makeText(this, "FFmpeg init failed", Toast.LENGTH_SHORT).show()
                     } else {
                         logToFile("FFmpeg handle: $ffmpegHandle")
+                        Toast.makeText(this, "FFmpeg ready", Toast.LENGTH_SHORT).show()
                     }
                 } else {
                     logToFile("Cannot get local file for FFmpeg seeking")
+                    Toast.makeText(this, "No local file for FFmpeg", Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
                 logToFile("Exception in FFmpeg setup: ${e.message}")
@@ -564,6 +585,7 @@ class PlayerActivity : AppCompatActivity() {
             }
         } else {
             logToFile("Native library not loaded, FFmpeg seeking disabled")
+            Toast.makeText(this, "Native library not loaded", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -672,7 +694,12 @@ class PlayerActivity : AppCompatActivity() {
                         val newPos = (dragStartPositionMs + deltaMs).coerceIn(0, exoPlayer?.duration ?: 0)
                         if (newPos != currentDragPositionMs) {
                             currentDragPositionMs = newPos
-                            updateFfmpegFrame(currentDragPositionMs * 1000)
+                            // Try FFmpeg frame update, but if it fails, still update overlay
+                            val success = updateFfmpegFrame(currentDragPositionMs * 1000)
+                            if (!success) {
+                                // Fallback: just update time (no frame)
+                                logToFile("FFmpeg frame failed, showing only time")
+                            }
                             updateOverlayTime(currentDragPositionMs)
                         }
                         return@setOnTouchListener true
@@ -685,6 +712,7 @@ class PlayerActivity : AppCompatActivity() {
                         // End drag: seek ExoPlayer to final position
                         isDragging = false
                         debugOverlay.visibility = View.GONE
+                        ffmpegIndicator.visibility = View.GONE
                         exitFfmpegSeekMode()
                         exoPlayer?.seekTo(currentDragPositionMs)
                         if (isPlaying) {
@@ -722,37 +750,46 @@ class PlayerActivity : AppCompatActivity() {
     private fun startFfmpegSeekMode() {
         if (!nativeLibraryLoaded) {
             logToFile("FFmpeg seek disabled: native library not loaded")
+            Toast.makeText(this, "FFmpeg not loaded", Toast.LENGTH_SHORT).show()
             return
         }
         if (ffmpegHandle == 0L) {
             logToFile("FFmpeg seek disabled: handle is 0")
+            Toast.makeText(this, "FFmpeg handle 0", Toast.LENGTH_SHORT).show()
             return
         }
         exoPlayer?.pause()
         isFfmpegMode = true
         debugOverlay.visibility = View.VISIBLE
+        ffmpegIndicator.visibility = View.VISIBLE
         updateFfmpegFrame(exoPlayer?.currentPosition?.times(1000) ?: 0)
         logToFile("FFmpeg seek mode started")
+        Toast.makeText(this, "FFmpeg seek started", Toast.LENGTH_SHORT).show()
     }
 
-    private fun updateFfmpegFrame(timestampUs: Long) {
-        if (!isFfmpegMode || ffmpegHandle == 0L) return
-        try {
+    // Returns true if frame was successfully updated
+    private fun updateFfmpegFrame(timestampUs: Long): Boolean {
+        if (!isFfmpegMode || ffmpegHandle == 0L) return false
+        return try {
             val result = nativeSeekTo(ffmpegHandle, timestampUs)
             if (result == 0) {
                 val bitmap = nativeGetFrameAsBitmap(ffmpegHandle)
                 if (bitmap != null) {
                     drawBitmapOnSurface(bitmap)
                     bitmap.recycle()
+                    true
                 } else {
-                    logToFile("nativeGetFrameAsBitmap returned null")
+                    logToFile("nativeGetFrameAsBitmap returned null at $timestampUs")
+                    false
                 }
             } else {
                 logToFile("nativeSeekTo failed with code $result at $timestampUs")
+                false
             }
         } catch (e: Exception) {
             logToFile("Exception in updateFfmpegFrame: ${e.message}")
             logToFile(e)
+            false
         }
     }
 
