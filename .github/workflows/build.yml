@@ -60,7 +60,7 @@ jobs:
         import android.view.View
         import android.view.WindowManager
         import android.widget.FrameLayout
-        import io.github.abdallahmehiz.mpvandroidlib.MPVView
+        import `is`.xyz.mpv.MPVView
         
         class MainActivity : Activity() {
             private var mpvView: MPVView? = null
@@ -351,8 +351,8 @@ jobs:
         }
         
         dependencies {
-            // The only dependency we need!
-            implementation("io.github.abdallahmehiz:mpv-android-lib:0.1.9")
+            // Using the latest version of mpv-android-lib
+            implementation("io.github.abdallahmehiz:mpv-android-lib:0.1.12")
         }
         GRADLE_EOF
         
@@ -434,6 +434,7 @@ jobs:
         chmod +x gradlew
         
         echo "✅ Gradle wrapper configured"
+
         
     - name: 🏗️ Build APK
       run: |
