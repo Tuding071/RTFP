@@ -65,7 +65,7 @@ jobs:
           include(":app")
           EOF
 
-          # app/build.gradle.kts with Compose support
+          # app/build.gradle.kts with Compose support (fixed compiler version)
           cat > app/build.gradle.kts << 'EOF'
           plugins {
               id("com.android.application")
@@ -91,7 +91,7 @@ jobs:
                   compose = true
               }
               composeOptions {
-                  kotlinCompilerExtensionVersion = "1.5.14"
+                  kotlinCompilerExtensionVersion = "1.5.13"
               }
               sourceSets {
                   getByName("main") {
