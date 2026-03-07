@@ -773,7 +773,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     // ------------------------------------------------------------------------
-    // Enhanced drawing diagnostics
+    // Enhanced drawing diagnostics (FIXED)
     // ------------------------------------------------------------------------
     private fun drawBitmapOnSurface(bitmap: Bitmap) {
         val surface = surfaceView.holder.surface
@@ -781,8 +781,9 @@ class PlayerActivity : AppCompatActivity() {
             logToFile("Surface invalid or null")
             return
         }
+        var canvas: Canvas? = null
         try {
-            val canvas = surface.lockCanvas(null)
+            canvas = surface.lockCanvas(null)
             if (canvas == null) {
                 logToFile("lockCanvas returned null")
                 return
@@ -796,17 +797,20 @@ class PlayerActivity : AppCompatActivity() {
             canvas.drawBitmap(bitmap, null, Rect(0, 0, canvas.width, canvas.height), null)
             surface.unlockCanvasAndPost(canvas)
         } catch (e: IllegalArgumentException) {
-            logToFile("IllegalArgumentException in draw: ${e.message ?: "null message"} - canvas? ${::canvas.isInitialized}")
+            logToFile("IllegalArgumentException in draw: ${e.message ?: "null message"}")
             e.printStackTrace()
-            // Try to unlock if locked
-            try {
-                surface?.unlockCanvasAndPost(canvas)
-            } catch (ignored: Exception) {}
+            if (canvas != null) {
+                try {
+                    surface?.unlockCanvasAndPost(canvas)
+                } catch (ignored: Exception) {}
+            }
         } catch (e: Exception) {
             logToFile("Draw exception: ${e.javaClass.simpleName} - ${e.message}")
-            try {
-                surface?.unlockCanvasAndPost(canvas)
-            } catch (ignored: Exception) {}
+            if (canvas != null) {
+                try {
+                    surface?.unlockCanvasAndPost(canvas)
+                } catch (ignored: Exception) {}
+            }
         }
     }
 
