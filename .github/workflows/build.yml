@@ -25,12 +25,10 @@ jobs:
 
       - name: Generate Android project structure
         run: |
-          # Create directories
           mkdir -p app/src/main/java/com/rtfp
           mkdir -p app/src/main/res/values
           mkdir -p app/src/main/jniLibs/arm64-v8a
 
-          # Copy Player.kt
           cp Player.kt app/src/main/java/com/rtfp/
 
           # gradle.properties
@@ -41,7 +39,7 @@ jobs:
           EOF
 
           # root build.gradle.kts
-          cat > build.gradle.kts << EOF
+          cat > build.gradle.kts << 'EOF'
           buildscript {
               repositories {
                   google()
@@ -66,7 +64,7 @@ jobs:
           EOF
 
           # app/build.gradle.kts
-          cat > app/build.gradle.kts << EOF
+          cat > app/build.gradle.kts << 'EOF'
           plugins {
               id("com.android.application")
               id("kotlin-android")
@@ -107,7 +105,8 @@ jobs:
             <uses-permission android:name="android.permission.INTERNET" />
             <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
             <application android:label="RTFP" android:theme="@style/Theme.AppCompat.NoActionBar">
-              <activity android:name=".PlayerActivity" android:exported="true">
+              <activity android:name=".PlayerActivity" android:exported="true"
+                        android:configChanges="orientation|screenSize|keyboardHidden">
                 <intent-filter>
                   <action android:name="android.intent.action.MAIN" />
                   <category android:name="android.intent.category.LAUNCHER" />
@@ -207,11 +206,10 @@ jobs:
           make install
           cd ..
 
-      - name: Write ffmpeg_wrapper.c
+      - name: Write ffmpeg_wrapper.c (byte array version)
         run: |
           cat > ffmpeg_wrapper.c << 'EOF'
           #include <jni.h>
-          #include <android/bitmap.h>
           #include <libavcodec/avcodec.h>
           #include <libavformat/avformat.h>
           #include <libswscale/swscale.h>
@@ -303,20 +301,6 @@ jobs:
               return ret;
           }
 
-          static int frame_to_bitmap(JNIEnv *env, VideoState *vs, jobject bitmap) {
-              void *pixels;
-              if (AndroidBitmap_lockPixels(env, bitmap, &pixels) < 0) return -1;
-
-              sws_scale(vs->sws_ctx,
-                        (const uint8_t* const*)vs->frame->data, vs->frame->linesize,
-                        0, vs->height,
-                        vs->rgb_frame->data, vs->rgb_frame->linesize);
-
-              memcpy(pixels, vs->rgb_buffer, vs->width * vs->height * 4);
-              AndroidBitmap_unlockPixels(env, bitmap);
-              return 0;
-          }
-
           JNIEXPORT jlong JNICALL
           Java_com_rtfp_PlayerActivity_nativeOpenFile(JNIEnv *env, jobject thiz, jstring path) {
               const char *filename = (*env)->GetStringUTFChars(env, path, NULL);
@@ -343,28 +327,34 @@ jobs:
               return seek_and_decode(vs, (int64_t)timestampUs);
           }
 
-          JNIEXPORT jobject JNICALL
-          Java_com_rtfp_PlayerActivity_nativeGetFrameAsBitmap(JNIEnv *env, jobject thiz, jlong handle) {
+          JNIEXPORT jbyteArray JNICALL
+          Java_com_rtfp_PlayerActivity_nativeGetFrameRGBA(JNIEnv *env, jobject thiz, jlong handle) {
               VideoState *vs = (VideoState*)(intptr_t)handle;
               if (!vs || !vs->frame) return NULL;
 
-              jclass bitmapClass = (*env)->FindClass(env, "android/graphics/Bitmap");
-              jmethodID createBitmapMethod = (*env)->GetStaticMethodID(env, bitmapClass,
-                                                "createBitmap",
-                                                "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;");
-              jclass configClass = (*env)->FindClass(env, "android/graphics/Bitmap$Config");
-              jmethodID configValueOf = (*env)->GetStaticMethodID(env, configClass,
-                                          "valueOf",
-                                          "(Ljava/lang/String;)Landroid/graphics/Bitmap$Config;");
-              jstring configName = (*env)->NewStringUTF(env, "ARGB_8888");
-              jobject bitmapConfig = (*env)->CallStaticObjectMethod(env, configClass, configValueOf, configName);
-              jobject bitmap = (*env)->CallStaticObjectMethod(env, bitmapClass, createBitmapMethod,
-                                                               vs->width, vs->height, bitmapConfig);
+              sws_scale(vs->sws_ctx,
+                        (const uint8_t* const*)vs->frame->data, vs->frame->linesize,
+                        0, vs->height,
+                        vs->rgb_frame->data, vs->rgb_frame->linesize);
 
-              if (frame_to_bitmap(env, vs, bitmap) < 0) {
-                  return NULL;
+              int size = vs->width * vs->height * 4;
+              jbyteArray result = (*env)->NewByteArray(env, size);
+              if (result != NULL) {
+                  (*env)->SetByteArrayRegion(env, result, 0, size, (jbyte*)vs->rgb_buffer);
               }
-              return bitmap;
+              return result;
+          }
+
+          JNIEXPORT jint JNICALL
+          Java_com_rtfp_PlayerActivity_nativeGetWidth(JNIEnv *env, jobject thiz, jlong handle) {
+              VideoState *vs = (VideoState*)(intptr_t)handle;
+              return vs ? vs->width : 0;
+          }
+
+          JNIEXPORT jint JNICALL
+          Java_com_rtfp_PlayerActivity_nativeGetHeight(JNIEnv *env, jobject thiz, jlong handle) {
+              VideoState *vs = (VideoState*)(intptr_t)handle;
+              return vs ? vs->height : 0;
           }
 
           JNIEXPORT void JNICALL
@@ -381,17 +371,7 @@ jobs:
           }
           EOF
 
-      - name: Check Android library location
-        run: |
-          export NDK_DIR=$(ls -d $ANDROID_HOME/ndk/* | head -n1)
-          export TOOLCHAIN=$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64
-          export TRIPLE="aarch64-linux-android"
-          export API_LEVEL=21
-          export SYSROOT=$TOOLCHAIN/sysroot
-          echo "Contents of $SYSROOT/usr/lib/$TRIPLE/$API_LEVEL/:"
-          ls -la $SYSROOT/usr/lib/$TRIPLE/$API_LEVEL/
-
-      - name: Build native wrapper library for arm64-v8a
+      - name: Build native wrapper library (byte array)
         run: |
           export NDK_DIR=$(ls -d $ANDROID_HOME/ndk/* | head -n1)
           export TOOLCHAIN=$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64
@@ -404,7 +384,6 @@ jobs:
             ffmpeg_wrapper.c \
             -I ffmpeg_src/install/$ABI/include \
             -L ffmpeg_src/install/$ABI/lib \
-            $SYSROOT/usr/lib/$TRIPLE/$API_LEVEL/libandroid.so \
             --sysroot=$SYSROOT \
             -shared -o libffmpeg_wrapper.so \
             -Wl,--no-undefined \
