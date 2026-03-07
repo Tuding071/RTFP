@@ -6,7 +6,6 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -144,11 +143,9 @@ class PlayerActivity : AppCompatActivity() {
     private var isFfmpegMode = false
 
     // ------------------------------------------------------------------------
-    // Touch handling state
+    // Drag seeking state
     // ------------------------------------------------------------------------
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var longPressRunnable: Runnable? = null
-    private var isLongPressing = false
     private var isDragging = false
 
     private var dragStartX = 0f
@@ -338,7 +335,6 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        // Re-enter fullscreen when window gains focus (e.g., after returning from home)
         if (hasFocus) {
             hideSystemUI()
         }
@@ -358,15 +354,12 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // New video opened – release old player and create new one
-        releasePlayer()
-        setupExoPlayer()
+        // New video opened – update player instead of recreating
         handleIntent(intent)
     }
 
     override fun onPause() {
         super.onPause()
-        // Pause playback and save position
         exoPlayer?.let {
             if (it.isPlaying) {
                 it.pause()
@@ -375,7 +368,6 @@ class PlayerActivity : AppCompatActivity() {
             }
             savedPosition = it.currentPosition
         }
-        // Close FFmpeg handle to release file
         if (ffmpegHandle != 0L) {
             nativeClose(ffmpegHandle)
             ffmpegHandle = 0
@@ -385,14 +377,11 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Do not auto-play; user must tap to resume (as requested)
         logToFile("onResume, position: $savedPosition")
-        // Restore saved position if needed
         if (savedPosition > 0 && exoPlayer != null) {
             exoPlayer?.seekTo(savedPosition)
             logToFile("Restored position onResume: $savedPosition")
         }
-        // Re-open FFmpeg handle if we have a video
         if (videoUri != null && nativeLibraryLoaded) {
             val file = uriToFile(videoUri!!)
             if (file != null && file.exists()) {
@@ -400,13 +389,7 @@ class PlayerActivity : AppCompatActivity() {
                 logToFile("Re-opened FFmpeg handle onResume: $ffmpegHandle")
             }
         }
-        // Re-enter fullscreen
         hideSystemUI()
-    }
-
-    override fun onStop() {
-        super.onStop()
-        // Pause if playing (already done in onPause)
     }
 
     override fun onDestroy() {
@@ -416,6 +399,12 @@ class PlayerActivity : AppCompatActivity() {
             nativeClose(ffmpegHandle)
             ffmpegHandle = 0
         }
+    }
+
+    override fun onBackPressed() {
+        // Clean up and exit
+        releasePlayer()
+        super.onBackPressed()
     }
 
     private fun releasePlayer() {
@@ -540,6 +529,12 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun openVideo(uri: Uri) {
         videoUri = uri
+
+        // If player already exists, just update media item
+        if (exoPlayer == null) {
+            setupExoPlayer()
+        }
+
         val mediaItem = MediaItem.fromUri(uri)
         exoPlayer?.setMediaItem(mediaItem)
         exoPlayer?.prepare()
@@ -646,26 +641,18 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     // ------------------------------------------------------------------------
-    // Touch handling
+    // Touch handling (only tap and drag)
     // ------------------------------------------------------------------------
     private fun setupTouchListeners() {
         surfaceView.setOnTouchListener { v, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    // Show error log if tapping top-left corner
                     if (event.x < 200 && event.y < 200) {
                         toggleErrorLog()
                         return@setOnTouchListener true
                     }
-                    longPressRunnable?.let { mainHandler.removeCallbacks(it) }
-                    longPressRunnable = Runnable {
-                        if (!isDragging) {
-                            isLongPressing = true
-                            exoPlayer?.setPlaybackSpeed(2.0f)
-                            logToFile("Long press: 2x speed")
-                        }
-                    }
-                    mainHandler.postDelayed(longPressRunnable!!, 500)
-
+                    // Prepare for possible drag
                     dragStartX = event.x
                     dragStartPositionMs = exoPlayer?.currentPosition ?: 0
                     currentDragPositionMs = dragStartPositionMs
@@ -675,8 +662,8 @@ class PlayerActivity : AppCompatActivity() {
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.x - dragStartX
                     if (!isDragging && kotlin.math.abs(dx) > 20) {
+                        // Start drag seek
                         isDragging = true
-                        mainHandler.removeCallbacks(longPressRunnable!!)
                         startFfmpegSeekMode()
                     }
 
@@ -694,27 +681,19 @@ class PlayerActivity : AppCompatActivity() {
                 }
 
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    mainHandler.removeCallbacks(longPressRunnable!!)
-
-                    if (isLongPressing) {
-                        isLongPressing = false
-                        exoPlayer?.setPlaybackSpeed(1.0f)
-                        logToFile("Long press released: normal speed")
-                    }
-
                     if (isDragging) {
+                        // End drag: seek ExoPlayer to final position
                         isDragging = false
                         debugOverlay.visibility = View.GONE
                         exitFfmpegSeekMode()
                         exoPlayer?.seekTo(currentDragPositionMs)
-                        logToFile("Seek ended at ${currentDragPositionMs}ms")
                         if (isPlaying) {
                             exoPlayer?.play()
                         }
+                        logToFile("Seek ended at ${currentDragPositionMs}ms")
                     } else {
-                        if (!isDragging && !isLongPressing) {
-                            togglePlayPause()
-                        }
+                        // No drag – single tap toggles play/pause
+                        togglePlayPause()
                     }
                     true
                 }
@@ -728,11 +707,11 @@ class PlayerActivity : AppCompatActivity() {
             if (it.isPlaying) {
                 it.pause()
                 isPlaying = false
-                logToFile("Paused")
+                logToFile("Paused (tap)")
             } else {
                 it.play()
                 isPlaying = true
-                logToFile("Play")
+                logToFile("Played (tap)")
             }
         }
     }
