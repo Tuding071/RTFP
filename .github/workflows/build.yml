@@ -1,4 +1,4 @@
-name: 🚀 RTFP Auto-Generator & Builder (Fixed)
+name: 🚀 RTFP Auto-Generator & Builder (arm64-only)
 
 on:
   push:
@@ -13,12 +13,11 @@ jobs:
     - name: 📦 Checkout Repository
       uses: actions/checkout@v4
       
-    - name: 🔧 Create Initial Gradle Files for Cache
+    - name: 🔧 Create Initial Gradle Files
       run: |
         mkdir -p gradle
         touch gradle.properties
         touch settings.gradle.kts
-        echo "✅ Initial files created for cache"
       
     - name: ☕ Setup JDK 17
       uses: actions/setup-java@v4
@@ -37,9 +36,8 @@ jobs:
         mkdir -p app/src/main/res/mipmap-xxxhdpi
         mkdir -p app/src/main/res/values
         mkdir -p gradle/wrapper
-        echo "✅ Project structure created"
         
-    - name: 📝 Generate MainActivity.kt (with permission handling)
+    - name: 📝 Generate MainActivity.kt
       run: |
         cat > app/src/main/java/com/rtfp/player/MainActivity.kt << 'KOTLIN_EOF'
         package com.rtfp.player
@@ -50,7 +48,6 @@ jobs:
         import android.net.Uri
         import android.os.Build
         import android.os.Bundle
-        import android.provider.Settings
         import android.view.View
         import android.view.WindowManager
         import android.widget.FrameLayout
@@ -85,7 +82,7 @@ jobs:
                 mpvView?.initialize(applicationInfo.nativeLibraryDir)
                 configureMPV()
                 
-                // Request permissions if needed
+                // Request permissions
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED ||
                         ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_MEDIA_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -104,7 +101,6 @@ jobs:
                         handleIntent(intent)
                     }
                 } else {
-                    // Android 10-12: READ_EXTERNAL_STORAGE not strictly needed for media?
                     handleIntent(intent)
                 }
             }
@@ -136,13 +132,11 @@ jobs:
                 videoUri?.let { uri ->
                     val path = when (uri.scheme) {
                         "content" -> {
-                            // Try to get file descriptor path, fallback to copying to cache
                             try {
                                 contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
                                     "/proc/self/fd/${pfd.fd}"
                                 }
                             } catch (e: Exception) {
-                                // If fd method fails, copy file to cache
                                 copyUriToCache(uri)
                             }
                         }
@@ -217,7 +211,6 @@ jobs:
             }
         }
         KOTLIN_EOF
-        echo "✅ MainActivity.kt generated"
         
     - name: 📄 Generate AndroidManifest.xml
       run: |
@@ -283,7 +276,6 @@ jobs:
             </application>
         </manifest>
         XML_EOF
-        echo "✅ AndroidManifest.xml generated"
         
     - name: 🎨 Generate App Icons
       run: |
@@ -294,7 +286,6 @@ jobs:
         convert -size 96x96 xc:"#00BCD4" app/src/main/res/mipmap-xhdpi/ic_launcher.png
         convert -size 144x144 xc:"#00BCD4" app/src/main/res/mipmap-xxhdpi/ic_launcher.png
         convert -size 192x192 xc:"#00BCD4" app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
-        echo "✅ App icons generated"
         
     - name: 🎨 Generate strings.xml
       run: |
@@ -304,9 +295,8 @@ jobs:
             <string name="app_name">RTFP</string>
         </resources>
         XML_EOF
-        echo "✅ strings.xml generated"
         
-    - name: 🔧 Generate app/build.gradle.kts (updated library)
+    - name: 🔧 Generate app/build.gradle.kts (arm64-only)
       run: |
         cat > app/build.gradle.kts << 'GRADLE_EOF'
         plugins {
@@ -326,19 +316,11 @@ jobs:
                 versionName = "1.0.0"
                 
                 ndk {
-                    abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
+                    abiFilters.add("arm64-v8a")   // only arm64
                 }
             }
             
-            splits {
-                abi {
-                    isEnable = true
-                    reset()
-                    include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
-                    isUniversalApk = true
-                }
-            }
-        
+            // No ABI splits needed; just one APK
             buildTypes {
                 release {
                     isMinifyEnabled = true
@@ -367,28 +349,21 @@ jobs:
         }
         
         dependencies {
-            implementation("io.github.abdallahmehiz:mpv-android-lib:0.1.14") // updated
-            implementation("androidx.core:core-ktx:1.12.0") // for permission helpers
+            implementation("io.github.abdallahmehiz:mpv-android-lib:0.1.14")
+            implementation("androidx.core:core-ktx:1.12.0")
         }
         GRADLE_EOF
-        echo "✅ app/build.gradle.kts generated"
         
     - name: 🔧 Generate ProGuard Rules
       run: |
         cat > app/proguard-rules.pro << 'PROGUARD_EOF'
-        # Keep MPV native methods
         -keep class `is`.xyz.mpv.** { *; }
         -keepclassmembers class `is`.xyz.mpv.** { *; }
-        
-        # Keep native methods
         -keepclasseswithmembernames class * {
             native <methods>;
         }
-        
-        # Keep ParcelFileDescriptor (used in fd path)
         -keep class android.os.ParcelFileDescriptor { *; }
         PROGUARD_EOF
-        echo "✅ proguard-rules.pro generated"
         
     - name: 🔧 Generate Root build.gradle.kts
       run: |
@@ -398,7 +373,6 @@ jobs:
             id("org.jetbrains.kotlin.android") version "2.1.0" apply false
         }
         GRADLE_EOF
-        echo "✅ Root build.gradle.kts generated"
         
     - name: 🔧 Generate settings.gradle.kts
       run: |
@@ -422,7 +396,6 @@ jobs:
         rootProject.name = "RTFP"
         include(":app")
         GRADLE_EOF
-        echo "✅ settings.gradle.kts generated"
         
     - name: 🔧 Generate gradle.properties
       run: |
@@ -434,7 +407,6 @@ jobs:
         android.nonTransitiveRClass=true
         android.defaults.buildfeatures.buildconfig=true
         PROPS_EOF
-        echo "✅ gradle.properties generated"
         
     - name: 🔧 Download Gradle Wrapper
       run: |
@@ -442,45 +414,35 @@ jobs:
         unzip -q gradle-8.11.1-bin.zip
         ./gradle-8.11.1/bin/gradle wrapper --gradle-version 8.11.1
         chmod +x gradlew
-        echo "✅ Gradle wrapper configured"
         
-    - name: 🔍 List dependencies (debug)
+    - name: 🔍 List Dependencies (Debug)
+      run: ./gradlew app:dependencies --configuration releaseCompileClasspath
+        
+    - name: 🏗️ Build APK (arm64-v8a)
       run: |
-        ./gradlew app:dependencies --configuration releaseCompileClasspath
-      continue-on-error: true
+        ./gradlew assembleRelease --no-daemon --stacktrace --info 2>&1 | tee build.log
         
-    - name: 🏗️ Build APK with detailed logs
+    - name: ✅ Verify APK Exists
       run: |
-        ./gradlew assembleRelease --no-daemon --stacktrace --info > build.log 2>&1 || true
-        echo "Build finished. Check build.log for details."
+        if [ ! -f app/build/outputs/apk/release/app-release-unsigned.apk ]; then
+          echo "❌ APK not found! Build failed."
+          exit 1
+        fi
         
-    - name: 📤 Upload build log
+    - name: 📤 Upload Build Log (on failure only)
+      if: failure()
       uses: actions/upload-artifact@v4
       with:
         name: build-log
         path: build.log
         
-    - name: 📦 Upload Universal APK
+    - name: 📦 Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: RTFP-universal
-        path: app/build/outputs/apk/release/*-universal-release-unsigned.apk
-        if-no-files-found: warn
-        
-    - name: 📦 Upload All APKs
-      uses: actions/upload-artifact@v4
-      with:
-        name: RTFP-all-apks
-        path: app/build/outputs/apk/release/*.apk
-        if-no-files-found: warn
+        name: RTFP-arm64
+        path: app/build/outputs/apk/release/app-release-unsigned.apk
         
     - name: 🎉 Build Summary
       run: |
-        echo "## 🎬 RTFP Video Player Build Attempt" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "Check the uploaded `build-log` artifact for compilation errors." >> $GITHUB_STEP_SUMMARY
-        if [ -f app/build/outputs/apk/release/*.apk ]; then
-          echo "✅ APKs generated successfully!" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "❌ Build failed. See log for details." >> $GITHUB_STEP_SUMMARY
-        fi
+        echo "## ✅ RTFP Video Player Built Successfully!" >> $GITHUB_STEP_SUMMARY
+        echo "APK for arm64-v8a is ready for download." >> $GITHUB_STEP_SUMMARY
