@@ -53,9 +53,9 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * A SurfaceView that maintains aspect ratio of video and centers itself.
- */
+// ------------------------------------------------------------------------
+// AspectRatioSurfaceView (unchanged)
+// ------------------------------------------------------------------------
 class AspectRatioSurfaceView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
@@ -80,11 +80,9 @@ class AspectRatioSurfaceView @JvmOverloads constructor(
         var newHeight: Int
 
         if (viewWidth / aspectRatio <= viewHeight) {
-            // Width is limiting factor
             newWidth = viewWidth
             newHeight = (viewWidth / aspectRatio).toInt()
         } else {
-            // Height is limiting factor
             newHeight = viewHeight
             newWidth = (viewHeight * aspectRatio).toInt()
         }
@@ -95,7 +93,9 @@ class AspectRatioSurfaceView @JvmOverloads constructor(
 
 class PlayerActivity : AppCompatActivity() {
 
-    // UI
+    // ------------------------------------------------------------------------
+    // UI Components
+    // ------------------------------------------------------------------------
     private lateinit var surfaceView: AspectRatioSurfaceView
     private lateinit var debugOverlay: TextView
     private lateinit var ffmpegIndicator: TextView
@@ -105,19 +105,25 @@ class PlayerActivity : AppCompatActivity() {
     private lateinit var clearLogButton: Button
     private var errorLogVisible = false
 
+    // ------------------------------------------------------------------------
     // File logging
+    // ------------------------------------------------------------------------
     private lateinit var logFile: File
     private val logLock = Any()
     private val isLoggingEnabled = AtomicBoolean(true)
 
+    // ------------------------------------------------------------------------
     // ExoPlayer
+    // ------------------------------------------------------------------------
     private var exoPlayer: ExoPlayer? = null
     private var isPlaying = false
     private var videoUri: Uri? = null
     private var nativeLibraryLoaded = false
     private var savedPosition: Long = 0
 
+    // ------------------------------------------------------------------------
     // FFmpeg native methods (byte array version)
+    // ------------------------------------------------------------------------
     private external fun nativeOpenFile(path: String): Long
     private external fun nativeSeekTo(handle: Long, timestampUs: Long): Int
     private external fun nativeGetFrameRGBA(handle: Long): ByteArray?
@@ -130,7 +136,9 @@ class PlayerActivity : AppCompatActivity() {
     private var videoWidth = 0
     private var videoHeight = 0
 
+    // ------------------------------------------------------------------------
     // Drag seeking state
+    // ------------------------------------------------------------------------
     private val mainHandler = Handler(Looper.getMainLooper())
     private var isDragging = false
     private var dragStartX = 0f
@@ -187,7 +195,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     // ------------------------------------------------------------------------
-    // Activity lifecycle
+    // Activity lifecycle (unchanged)
     // ------------------------------------------------------------------------
     override fun onCreate(savedInstanceState: Bundle?) {
         logFile = File(cacheDir, LOG_FILE_NAME)
@@ -424,7 +432,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     // ------------------------------------------------------------------------
-    // Logging
+    // Logging helpers
     // ------------------------------------------------------------------------
     private fun logToFile(message: String) {
         if (!isLoggingEnabled.get()) return
@@ -773,7 +781,7 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     // ------------------------------------------------------------------------
-    // Enhanced drawing diagnostics (FIXED)
+    // Enhanced drawing diagnostics (with stack trace logging)
     // ------------------------------------------------------------------------
     private fun drawBitmapOnSurface(bitmap: Bitmap) {
         val surface = surfaceView.holder.surface
@@ -798,7 +806,11 @@ class PlayerActivity : AppCompatActivity() {
             surface.unlockCanvasAndPost(canvas)
         } catch (e: IllegalArgumentException) {
             logToFile("IllegalArgumentException in draw: ${e.message ?: "null message"}")
-            e.printStackTrace()
+            // Log full stack trace
+            val sw = StringWriter()
+            val pw = PrintWriter(sw)
+            e.printStackTrace(pw)
+            logToFile(sw.toString())
             if (canvas != null) {
                 try {
                     surface?.unlockCanvasAndPost(canvas)
@@ -806,6 +818,10 @@ class PlayerActivity : AppCompatActivity() {
             }
         } catch (e: Exception) {
             logToFile("Draw exception: ${e.javaClass.simpleName} - ${e.message}")
+            val sw = StringWriter()
+            val pw = PrintWriter(sw)
+            e.printStackTrace(pw)
+            logToFile(sw.toString())
             if (canvas != null) {
                 try {
                     surface?.unlockCanvasAndPost(canvas)
