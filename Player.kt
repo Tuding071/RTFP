@@ -47,6 +47,8 @@ import java.io.FileOutputStream
 import java.io.FileReader
 import java.io.PrintWriter
 import java.io.StringWriter
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -719,15 +721,20 @@ class PlayerActivity : AppCompatActivity() {
             if (result == 0) {
                 val rgba = nativeGetFrameRGBA(ffmpegHandle)
                 if (rgba != null && videoWidth > 0 && videoHeight > 0) {
+                    logToFile("Frame size: ${rgba.size}, expected: ${videoWidth * videoHeight * 4}")
                     val bitmap = Bitmap.createBitmap(videoWidth, videoHeight, Bitmap.Config.ARGB_8888)
-                    bitmap.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(rgba))
+                    val buffer = ByteBuffer.wrap(rgba)
+                    buffer.order(ByteOrder.nativeOrder())
+                    bitmap.copyPixelsFromBuffer(buffer)
                     drawBitmapOnSurface(bitmap)
                     bitmap.recycle()
                     true
                 } else {
+                    logToFile("Invalid frame data: rgba=${rgba != null}, w=$videoWidth, h=$videoHeight")
                     false
                 }
             } else {
+                logToFile("nativeSeekTo failed: $result")
                 false
             }
         } catch (e: Exception) {
@@ -739,13 +746,15 @@ class PlayerActivity : AppCompatActivity() {
     private fun drawBitmapOnSurface(bitmap: Bitmap) {
         val surface = surfaceView.holder.surface ?: return
         try {
-            val canvas = surface.lockCanvas(null) ?: return
-            val rect = Rect(0, 0, canvas.width, canvas.height)
-            val paint = Paint().apply { isFilterBitmap = true }
-            canvas.drawBitmap(bitmap, null, rect, paint)
+            val canvas = surface.lockCanvas(null)
+            if (canvas == null) {
+                logToFile("lockCanvas returned null")
+                return
+            }
+            canvas.drawBitmap(bitmap, null, Rect(0, 0, canvas.width, canvas.height), null)
             surface.unlockCanvasAndPost(canvas)
         } catch (e: Exception) {
-            logToFile("Draw failed: ${e.message}")
+            logToFile("Draw exception: ${e.message}")
         }
     }
 
