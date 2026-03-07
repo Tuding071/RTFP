@@ -125,14 +125,16 @@ class PlayerActivity : AppCompatActivity() {
     // FFmpeg native methods
     // ------------------------------------------------------------------------
     init {
-        try {
+        val libLoadSuccess = try {
             System.loadLibrary("ffmpeg_wrapper")
-            nativeLibraryLoaded = true
-            logToFile("Native library loaded successfully")
+            true
         } catch (e: UnsatisfiedLinkError) {
             logToFile("Failed to load native library: ${e.message}")
             e.printStackTrace()
+            false
         }
+        nativeLibraryLoaded = libLoadSuccess
+        logToFile("Native library loaded = $nativeLibraryLoaded")
     }
 
     private external fun nativeOpenFile(path: String): Long
@@ -159,6 +161,7 @@ class PlayerActivity : AppCompatActivity() {
         private const val TAG = "RTFP"
         private const val LOG_FILE_NAME = "rtfp_crash_log.txt"
         private const val KEY_POSITION = "player_position"
+        private const val DRAG_THRESHOLD = 10 // pixels
     }
 
     // ------------------------------------------------------------------------
@@ -666,9 +669,11 @@ class PlayerActivity : AppCompatActivity() {
     // Touch handling (only tap and drag)
     // ------------------------------------------------------------------------
     private fun setupTouchListeners() {
+        logToFile("Setting up touch listeners")
         surfaceView.setOnTouchListener { v, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    logToFile("Touch DOWN at (${event.x}, ${event.y})")
                     // Show error log if tapping top-left corner
                     if (event.x < 200 && event.y < 200) {
                         toggleErrorLog()
@@ -683,7 +688,8 @@ class PlayerActivity : AppCompatActivity() {
 
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.x - dragStartX
-                    if (!isDragging && kotlin.math.abs(dx) > 20) {
+                    if (!isDragging && kotlin.math.abs(dx) > DRAG_THRESHOLD) {
+                        logToFile("Drag started, dx = $dx")
                         // Start drag seek
                         isDragging = true
                         startFfmpegSeekMode()
@@ -697,7 +703,6 @@ class PlayerActivity : AppCompatActivity() {
                             // Try FFmpeg frame update, but if it fails, still update overlay
                             val success = updateFfmpegFrame(currentDragPositionMs * 1000)
                             if (!success) {
-                                // Fallback: just update time (no frame)
                                 logToFile("FFmpeg frame failed, showing only time")
                             }
                             updateOverlayTime(currentDragPositionMs)
@@ -709,6 +714,7 @@ class PlayerActivity : AppCompatActivity() {
 
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (isDragging) {
+                        logToFile("Drag ended")
                         // End drag: seek ExoPlayer to final position
                         isDragging = false
                         debugOverlay.visibility = View.GONE
@@ -720,6 +726,7 @@ class PlayerActivity : AppCompatActivity() {
                         }
                         logToFile("Seek ended at ${currentDragPositionMs}ms")
                     } else {
+                        logToFile("Tap detected")
                         // No drag – single tap toggles play/pause
                         togglePlayPause()
                     }
