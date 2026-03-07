@@ -19,6 +19,14 @@ jobs:
     - name: 📦 Checkout Repository
       uses: actions/checkout@v4
       
+    - name: 🔧 Create Initial Gradle Files for Cache
+      run: |
+        # Create minimal gradle files so cache can work
+        mkdir -p gradle
+        touch gradle.properties
+        touch settings.gradle.kts
+        echo "✅ Initial files created for cache"
+      
     - name: ☕ Setup JDK 17
       uses: actions/setup-java@v4
       with:
