@@ -79,7 +79,6 @@ import androidx.media3.exoplayer.ExoPlayer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.Job
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
@@ -680,6 +679,10 @@ fun PlayerOverlay(
     var currentDragPositionMs by remember { mutableLongStateOf(0L) }
     var wasPlayingBeforeDrag by remember { mutableStateOf(false) }
 
+    // For long press detection
+    var isDown by remember { mutableStateOf(false) }
+    var gestureActive by remember { mutableStateOf(false) } // true if drag or vertical swipe started
+
     // UI state
     var showSeekbar by remember { mutableStateOf(true) }
     var showTimeOverlay by remember { mutableStateOf(false) }
@@ -720,18 +723,27 @@ fun PlayerOverlay(
         }
     }
 
+    // Long press timer
+    LaunchedEffect(isDown, gestureActive) {
+        if (isDown && !gestureActive) {
+            delay(300)
+            if (isDown && !gestureActive) {
+                isLongPressing = true
+            }
+        } else {
+            isLongPressing = false
+        }
+    }
+
     Box(modifier = modifier) {
         // Gesture area
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
-                    val longPressTimeout = 300L
                     val swipeThreshold = 100f
-                    var downTime = 0L
                     var downX = 0f
                     var downY = 0f
-                    var longPressJob: Job? = null
                     var dragActive = false
                     var verticalSwipeActive = false
 
@@ -743,19 +755,12 @@ fun PlayerOverlay(
                                     change.pressed && change.id == PointerId(0) -> {
                                         // Primary pointer down
                                         if (change.previousPressed == false) {
-                                            downTime = System.currentTimeMillis()
                                             downX = change.position.x
                                             downY = change.position.y
                                             dragActive = false
                                             verticalSwipeActive = false
-                                            // Start long press detection
-                                            longPressJob?.cancel()
-                                            longPressJob = this.launch {
-                                                delay(longPressTimeout)
-                                                if (!dragActive && !verticalSwipeActive) {
-                                                    isLongPressing = true
-                                                }
-                                            }
+                                            isDown = true
+                                            gestureActive = false
                                         }
 
                                         // Move handling
@@ -766,7 +771,7 @@ fun PlayerOverlay(
                                             if (abs(deltaX) > abs(deltaY) && abs(deltaX) > 20) {
                                                 // Horizontal drag started
                                                 dragActive = true
-                                                longPressJob?.cancel()
+                                                gestureActive = true
                                                 dragStartX = downX
                                                 dragStartPositionMs = player.getCurrentPosition()
                                                 wasPlayingBeforeDrag = player.isPlaying
@@ -776,7 +781,7 @@ fun PlayerOverlay(
                                             } else if (abs(deltaY) > abs(deltaX) && abs(deltaY) > swipeThreshold) {
                                                 // Vertical swipe
                                                 verticalSwipeActive = true
-                                                longPressJob?.cancel()
+                                                gestureActive = true
                                                 if (deltaY < 0) {
                                                     val newPos = (player.getCurrentPosition() + 5000).coerceAtMost(player.getDuration())
                                                     player.seekTo(newPos)
@@ -810,10 +815,7 @@ fun PlayerOverlay(
 
                                     !change.pressed && change.id == PointerId(0) -> {
                                         // Primary pointer up
-                                        longPressJob?.cancel()
-                                        if (isLongPressing) {
-                                            isLongPressing = false
-                                        } else if (dragActive) {
+                                        if (dragActive) {
                                             player.endFfmpegSeekMode(currentDragPositionMs)
                                             isDragging = false
                                             showTimeOverlay = false
@@ -821,7 +823,7 @@ fun PlayerOverlay(
                                             // Check for tap (short press)
                                             val deltaX = change.position.x - downX
                                             val deltaY = change.position.y - downY
-                                            val duration = System.currentTimeMillis() - downTime
+                                            val duration = System.currentTimeMillis() - (event.changes.firstOrNull()?.uptimeMillis ?: 0)
                                             if (duration < 500 && abs(deltaX) < 20 && abs(deltaY) < 20) {
                                                 player.togglePlayPause()
                                                 feedbackText = if (player.isPlaying) "Play" else "Pause"
@@ -832,8 +834,8 @@ fun PlayerOverlay(
                                                 }
                                             }
                                         }
-                                        dragActive = false
-                                        verticalSwipeActive = false
+                                        isDown = false
+                                        gestureActive = false
                                     }
                                 }
                                 change.consume()
