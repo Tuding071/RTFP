@@ -25,10 +25,12 @@ jobs:
 
       - name: Generate Android project structure
         run: |
+          # Create directories
           mkdir -p app/src/main/java/com/rtfp
           mkdir -p app/src/main/res/values
           mkdir -p app/src/main/jniLibs/arm64-v8a
 
+          # Copy Player.kt
           cp Player.kt app/src/main/java/com/rtfp/
 
           # gradle.properties
@@ -63,7 +65,7 @@ jobs:
           include(":app")
           EOF
 
-          # app/build.gradle.kts
+          # app/build.gradle.kts with Compose support
           cat > app/build.gradle.kts << 'EOF'
           plugins {
               id("com.android.application")
@@ -85,6 +87,12 @@ jobs:
               kotlinOptions {
                   jvmTarget = "17"
               }
+              buildFeatures {
+                  compose = true
+              }
+              composeOptions {
+                  kotlinCompilerExtensionVersion = "1.5.14"
+              }
               sourceSets {
                   getByName("main") {
                       jniLibs.srcDirs("src/main/jniLibs")
@@ -95,6 +103,12 @@ jobs:
               implementation("androidx.appcompat:appcompat:1.6.1")
               implementation("androidx.media3:media3-exoplayer:1.4.0")
               implementation("androidx.media3:media3-ui:1.4.0")
+              // Compose
+              implementation(platform("androidx.compose:compose-bom:2024.10.00"))
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.compose.ui:ui-tooling-preview")
+              implementation("androidx.activity:activity-compose:1.9.0")
           }
           EOF
 
