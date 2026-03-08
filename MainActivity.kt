@@ -58,11 +58,6 @@ class MainActivity : ComponentActivity() {
         }
     }
     
-    override fun onPause() {
-        super.onPause()
-        // PlayerScreen will handle saving position via onPositionChange callback
-    }
-    
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         outState.putLong("position", savedPosition)
@@ -77,8 +72,8 @@ class MainActivity : ComponentActivity() {
         
         doubleBackToExitPressedOnce = true
         
-        // Tell PlayerScreen to pause if playing
-        // We'll handle this via a callback in PlayerScreen
+        // Show message or just handle pause through lifecycle
+        // The pause will be handled by ON_PAUSE event in PlayerScreen
         
         lifecycleScope.launch {
             delay(200)
