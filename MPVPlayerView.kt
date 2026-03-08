@@ -96,20 +96,7 @@ class MPVPlayerView @JvmOverloads constructor(
     }
 
     /**
-     * Play a video file or URL
-     */
-    override fun playFile(path: String) {
-        try {
-            mpv.command("loadfile", path)
-            Log.d(TAG, "Playing file: $path")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error playing file: $path", e)
-            throw e
-        }
-    }
-
-    /**
-     * Get MPV instance for property access
+     * Get MPV instance for property access and commands
      */
     fun getMPV() = mpv
 
