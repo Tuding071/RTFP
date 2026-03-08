@@ -1,1 +1,433 @@
-t
+name: Build RTFP APK (Signed)
+
+permissions:
+  contents: write
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 🧾 Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: ⚙️ Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'adopt'
+        java-version: '17'
+    
+    - name: 📁 Generate project structure
+      run: |
+        # Create directory structure
+        mkdir -p app/src/main/java/com/rtfp/player
+        mkdir -p app/src/main/res/values
+        mkdir -p app/src/main/res/mipmap-hdpi
+        mkdir -p app/src/main/res/mipmap-mdpi
+        mkdir -p app/src/main/res/mipmap-xhdpi
+        mkdir -p app/src/main/res/mipmap-xxhdpi
+        mkdir -p app/src/main/res/mipmap-xxxhdpi
+        mkdir -p gradle/wrapper
+        
+        # Copy all .kt files from root to package directory
+        cp *.kt app/src/main/java/com/rtfp/player/ 2>/dev/null || echo "No .kt files found in root"
+        
+        echo "✅ Project structure created"
+    
+    - name: Generate settings.gradle
+      run: |
+        cat > settings.gradle << 'EOF'
+        pluginManagement {
+            repositories {
+                google()
+                mavenCentral()
+                gradlePluginPortal()
+            }
+        }
+        dependencyResolutionManagement {
+            repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+            repositories {
+                google()
+                mavenCentral()
+            }
+        }
+        rootProject.name = "RTFP"
+        include ':app'
+        EOF
+        echo "✓ settings.gradle generated"
+    
+    - name: Generate root build.gradle
+      run: |
+        cat > build.gradle << 'EOF'
+        // Root build.gradle - repositories are managed in settings.gradle
+        buildscript {
+            ext.kotlin_version = '1.9.22'
+            repositories {
+                google()
+                mavenCentral()
+            }
+            dependencies {
+                classpath 'com.android.tools.build:gradle:8.2.2'
+                classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+            }
+        }
+
+        task clean(type: Delete) {
+            delete rootProject.buildDir
+        }
+        EOF
+        echo "✓ root build.gradle generated"
+    
+    - name: Generate app build.gradle
+      run: |
+        cat > app/build.gradle << 'EOF'
+        plugins {
+            id 'com.android.application'
+            id 'org.jetbrains.kotlin.android'
+        }
+
+        android {
+            namespace 'com.rtfp.player'
+            compileSdk 34
+
+            defaultConfig {
+                applicationId "com.rtfp.player"
+                minSdk 30
+                targetSdk 34
+                versionCode 1
+                versionName "1.0"
+            }
+
+            buildTypes {
+                release {
+                    minifyEnabled false
+                    proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+                }
+                debug {
+                    debuggable true
+                }
+            }
+
+            compileOptions {
+                sourceCompatibility JavaVersion.VERSION_17
+                targetCompatibility JavaVersion.VERSION_17
+            }
+
+            kotlinOptions {
+                jvmTarget = '17'
+                freeCompilerArgs += [
+                    "-opt-in=androidx.compose.foundation.ExperimentalFoundationApi"
+                ]
+            }
+
+            buildFeatures {
+                compose true
+            }
+
+            composeOptions {
+                kotlinCompilerExtensionVersion '1.5.8'
+            }
+
+            packagingOptions {
+                resources {
+                    excludes += '/META-INF/{AL2.0,LGPL2.1}'
+                }
+            }
+        }
+
+        dependencies {
+            // MPV Android Library (from Maven Central)
+            implementation 'io.github.abdallahmehiz:mpv-android-lib:0.1.12'
+            
+            // Kotlin
+            implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.22"
+            
+            // AndroidX Core
+            implementation 'androidx.core:core-ktx:1.12.0'
+            implementation 'androidx.appcompat:appcompat:1.6.1'
+            implementation 'androidx.activity:activity-compose:1.8.2'
+            implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
+            implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0'
+            
+            // Compose
+            implementation platform('androidx.compose:compose-bom:2024.02.00')
+            implementation 'androidx.compose.ui:ui'
+            implementation 'androidx.compose.ui:ui-graphics'
+            implementation 'androidx.compose.ui:ui-tooling-preview'
+            implementation 'androidx.compose.material3:material3'
+            implementation 'androidx.compose.runtime:runtime-livedata'
+            
+            // Coroutines
+            implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
+            implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3'
+        }
+        EOF
+        echo "✓ app/build.gradle generated"
+    
+    - name: Generate AndroidManifest.xml
+      run: |
+        cat > app/src/main/AndroidManifest.xml << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            
+            <!-- Permissions -->
+            <uses-permission android:name="android.permission.INTERNET" />
+            <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+                android:maxSdkVersion="32" />
+            <uses-permission android:name="android.permission.WAKE_LOCK" />
+            
+            <application
+                android:allowBackup="true"
+                android:icon="@mipmap/ic_launcher"
+                android:label="RTFP"
+                android:supportsRtl="true"
+                android:theme="@style/Theme.RTFP"
+                android:hardwareAccelerated="true">
+                
+                <activity
+                    android:name=".MainActivity"
+                    android:exported="true"
+                    android:configChanges="orientation|screenSize|keyboardHidden"
+                    android:screenOrientation="landscape"
+                    android:theme="@style/Theme.RTFP">
+                    
+                    <!-- Default launcher -->
+                    <intent-filter>
+                        <action android:name="android.intent.action.MAIN" />
+                        <category android:name="android.intent.category.LAUNCHER" />
+                    </intent-filter>
+                    
+                    <!-- Handle video file intents -->
+                    <intent-filter>
+                        <action android:name="android.intent.action.VIEW" />
+                        <category android:name="android.intent.category.DEFAULT" />
+                        <category android:name="android.intent.category.BROWSABLE" />
+                        <data android:scheme="file" />
+                        <data android:scheme="content" />
+                        <data android:mimeType="video/*" />
+                        <data android:mimeType="audio/*" />
+                    </intent-filter>
+                    
+                    <!-- Handle share intents -->
+                    <intent-filter>
+                        <action android:name="android.intent.action.SEND" />
+                        <category android:name="android.intent.category.DEFAULT" />
+                        <data android:mimeType="video/*" />
+                        <data android:mimeType="audio/*" />
+                    </intent-filter>
+                    
+                    <!-- Handle HTTP/HTTPS URLs -->
+                    <intent-filter>
+                        <action android:name="android.intent.action.VIEW" />
+                        <category android:name="android.intent.category.DEFAULT" />
+                        <category android:name="android.intent.category.BROWSABLE" />
+                        <data android:scheme="http" />
+                        <data android:scheme="https" />
+                        <data android:mimeType="video/*" />
+                    </intent-filter>
+                </activity>
+            </application>
+        </manifest>
+        EOF
+        echo "✓ AndroidManifest.xml generated"
+    
+    - name: Generate strings.xml
+      run: |
+        cat > app/src/main/res/values/strings.xml << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <resources>
+            <string name="app_name">RTFP</string>
+        </resources>
+        EOF
+        echo "✓ strings.xml generated"
+    
+    - name: Generate themes.xml
+      run: |
+        cat > app/src/main/res/values/themes.xml << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <resources>
+            <style name="Theme.RTFP" parent="android:Theme.Material.Light.NoActionBar.Fullscreen">
+                <item name="android:statusBarColor">@android:color/black</item>
+                <item name="android:navigationBarColor">@android:color/black</item>
+                <item name="android:windowFullscreen">true</item>
+            </style>
+        </resources>
+        EOF
+        echo "✓ themes.xml generated"
+    
+    - name: 🎨 Generate launcher icon
+      run: |
+        # Create placeholder PNG files for launcher icons
+        echo "Creating placeholder launcher icons..."
+        for dpi in hdpi mdpi xhdpi xxhdpi xxxhdpi; do
+          # Create empty PNG file (1x1 transparent pixel)
+          printf '\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0a\x49\x44\x41\x54\x78\x9c\x63\x00\x01\x00\x00\x05\x00\x01\x0d\x0a\x2d\xb4\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82' > app/src/main/res/mipmap-$dpi/ic_launcher.png
+        done
+        echo "✅ Launcher icons created"
+    
+    - name: 📝 Generate gradle.properties
+      run: |
+        cat > gradle.properties << 'EOF'
+        org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+        android.useAndroidX=true
+        android.enableJetifier=true
+        kotlin.code.style=official
+        org.gradle.parallel=true
+        org.gradle.caching=true
+        android.defaults.buildfeatures.buildconfig=true
+        EOF
+        echo "✅ gradle.properties generated"
+    
+    - name: 🔧 Generate proguard-rules.pro
+      run: |
+        cat > app/proguard-rules.pro << 'EOF'
+        # Keep MPV library
+        -keep class is.xyz.mpv.** { *; }
+        -keep class com.rtfp.player.** { *; }
+        -dontwarn is.xyz.mpv.**
+        EOF
+        echo "✅ proguard-rules.pro generated"
+    
+    - name: 🎯 Initialize Gradle Wrapper
+      run: |
+        # Generate gradle wrapper using gradle command
+        gradle wrapper --gradle-version 8.2 --distribution-type bin
+        echo "✅ Gradle wrapper initialized"
+    
+    - name: 🔓 Make gradlew executable
+      run: chmod +x ./gradlew
+    
+    - name: 🏗️ Build Debug APK
+      id: build_apk
+      run: |
+        set +e  # Don't exit on error
+        ./gradlew assembleDebug --stacktrace 2>&1 | tee build_log.txt
+        BUILD_EXIT_CODE=$?
+        echo "build_exit_code=$BUILD_EXIT_CODE" >> $GITHUB_OUTPUT
+        exit $BUILD_EXIT_CODE
+    
+    - name: 📋 Create error report
+      if: failure()
+      run: |
+        echo "## ❌ Build Failed - Run #${{ github.run_number }}" > error_report.md
+        echo "" >> error_report.md
+        echo "### Quick Error Summary:" >> error_report.md
+        echo '```' >> error_report.md
+        grep -E "(FAILED|error|Error|ERROR)" build_log.txt | tail -n 50 >> error_report.md || echo "No specific errors found" >> error_report.md
+        echo '```' >> error_report.md
+        echo "" >> error_report.md
+        echo "### Last 200 Lines of Build Log:" >> error_report.md
+        echo '```' >> error_report.md
+        tail -n 200 build_log.txt >> error_report.md
+        echo '```' >> error_report.md
+        
+        echo "✅ Error report created"
+    
+    - name: 📤 Upload error logs
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: error-logs-run-${{ github.run_number }}
+        path: |
+          error_report.md
+          build_log.txt
+        retention-days: 7
+    
+    - name: 🔧 Install apksigner
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y apksigner
+        echo "✅ apksigner installed"
+    
+    - name: 🔑 Create dummy keystore
+      run: |
+        keytool -genkeypair -v \
+          -keystore dummy.keystore \
+          -storepass test1234 \
+          -alias dummykey \
+          -keypass test1234 \
+          -dname "CN=RTFP, OU=Player, O=RTFP, L=Test, S=Test, C=PH" \
+          -keyalg RSA \
+          -keysize 2048 \
+          -validity 10000
+        echo "✅ Dummy keystore created"
+    
+    - name: ✍️ Sign APK with dummy keystore
+      run: |
+        # Find the debug APK
+        DEBUG_APK=$(find app/build/outputs/apk/debug -name "*.apk" -type f | head -n 1)
+        
+        if [ -z "$DEBUG_APK" ]; then
+          echo "❌ No debug APK found!"
+          find app/build/outputs/apk -type f
+          exit 1
+        fi
+        
+        echo "📦 Found APK: $DEBUG_APK"
+        
+        # Sign it
+        apksigner sign \
+          --ks dummy.keystore \
+          --ks-key-alias dummykey \
+          --ks-pass pass:test1234 \
+          --key-pass pass:test1234 \
+          --out RTFP-signed.apk \
+          "$DEBUG_APK"
+        
+        echo "✅ APK signed successfully"
+    
+    - name: ✅ Verify APK signature
+      run: |
+        apksigner verify RTFP-signed.apk
+        echo "✅ APK signature verified"
+    
+    - name: 📁 Get build info
+      id: build_info
+      run: |
+        commit_count=$(git rev-list --count HEAD)
+        build_time=$(TZ='Asia/Manila' date +'%Y%m%d_%I%M%p')
+        echo "commit_count=$commit_count" >> $GITHUB_OUTPUT
+        echo "build_time=$build_time" >> $GITHUB_OUTPUT
+        
+        # Rename APK with timestamp
+        mv RTFP-signed.apk "RTFP_${build_time}.apk"
+        
+        echo "✅ Build: r${commit_count} at ${build_time}"
+    
+    - name: 📤 Upload Signed APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: RTFP-r${{ steps.build_info.outputs.commit_count }}-${{ steps.build_info.outputs.build_time }}
+        path: RTFP_*.apk
+        retention-days: 30
+    
+    - name: 📊 Build summary
+      run: |
+        echo "## 🎉 Build Successful!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**RTFP Player** signed APK ready to install!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📦 Build Info:" >> $GITHUB_STEP_SUMMARY
+        echo "- **Build:** r${{ steps.build_info.outputs.commit_count }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Time:** ${{ steps.build_info.outputs.build_time }} (PH)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Signed:** ✅ Yes (dummy keystore)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### ✨ Features:" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Single tap → Pause/Resume + Toggle UI" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Long press → 2x Speed playback" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Horizontal swipe → Real-time seeking" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Vertical swipe → Quick seek ±5s" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Progress bar drag → Seek with threshold" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Auto-hide UI after 4s" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📥 Download:" >> $GITHUB_STEP_SUMMARY
+        echo "Download **RTFP_${{ steps.build_info.outputs.build_time }}.apk** from Artifacts above." >> $GITHUB_STEP_SUMMARY
