@@ -253,6 +253,10 @@ fun PlayerOverlay(
         }
     }
     
+    fun getFreshPosition(): Float {
+        return (mpv.getPropertyDouble("time-pos") ?: 0.0).toFloat()
+    }
+    
     fun performQuickSeek(seconds: Int) {
         val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
         val duration = mpv.getPropertyDouble("duration") ?: 0.0
@@ -620,6 +624,7 @@ fun PlayerOverlay(
                             duration = seekbarDuration,
                             onValueChange = { handleProgressBarDrag(it) },
                             onValueChangeFinished = { handleDragFinished() },
+                            getFreshPosition = { getFreshPosition() },
                             modifier = Modifier.fillMaxSize().height(48.dp)
                         )
                     }
@@ -679,6 +684,7 @@ fun SimpleDraggableProgressBar(
     duration: Float,
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
+    getFreshPosition: () -> Float,
     modifier: Modifier = Modifier
 ) {
     var dragStartX by remember { mutableStateOf(0f) }
@@ -713,8 +719,7 @@ fun SimpleDraggableProgressBar(
                     detectDragGestures(
                         onDragStart = { offset ->
                             dragStartX = offset.x
-                            // Calculate position based on WHERE USER TAPPED, not current video time
-                            dragStartPosition = (offset.x / size.width) * duration
+                            dragStartPosition = getFreshPosition()
                             hasPassedThreshold = false
                         },
                         onDrag = { change, _ ->
@@ -730,7 +735,7 @@ fun SimpleDraggableProgressBar(
                                 }
                             }
                             
-                            // Calculate from original drag start position
+                            // Calculate delta from ORIGINAL drag start (NOT threshold point)
                             val deltaX = currentX - dragStartX
                             val deltaPosition = (deltaX / size.width) * duration
                             val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
