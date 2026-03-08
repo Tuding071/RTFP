@@ -81,14 +81,26 @@ fun PlayerScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     var mpvView by remember { mutableStateOf<SimpleMPVView?>(null) }
     var isVideoLoaded by remember { mutableStateOf(false) }
+    var savedPosition by remember { mutableStateOf<Double?>(null) }
     
-    // Lifecycle observer for auto-pause
+    // Lifecycle observer for auto-pause with position saving
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_PAUSE -> {
-                    // Auto-pause when going to background
-                    mpvView?.mpv?.setPropertyBoolean("pause", true)
+                    // Save exact position before pausing
+                    mpvView?.let { view ->
+                        savedPosition = view.mpv.getPropertyDouble("time-pos")
+                        view.mpv.setPropertyBoolean("pause", true)
+                    }
+                }
+                Lifecycle.Event.ON_RESUME -> {
+                    // Restore exact position when resuming (stay paused)
+                    mpvView?.let { view ->
+                        savedPosition?.let { pos ->
+                            view.mpv.command("seek", pos.toString(), "absolute", "exact")
+                        }
+                    }
                 }
                 else -> {}
             }
