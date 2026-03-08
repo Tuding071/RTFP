@@ -39,15 +39,21 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import `is`.xyz.mpv.MPVLib
 import kotlin.math.abs
 
 @Composable
 fun PlayerOverlay(
     viewModel: PlayerViewModel,
+    mpvPlayerView: MPVPlayerView?,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    
+    // Early return if mpv not ready
+    if (mpvPlayerView == null) return
+    
+    val mpv = mpvPlayerView.getMPV()
+    
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
     var seekTargetTime by remember { mutableStateOf("00:00") }
@@ -145,7 +151,7 @@ fun PlayerOverlay(
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         isSeekInProgress = true
-        MPVLib.command("seek", targetPosition.toString(), "absolute", "exact")
+        mpv.command("seek", targetPosition.toString(), "absolute", "exact")
         coroutineScope.launch {
             delay(seekThrottleMs)
             isSeekInProgress = false
@@ -153,12 +159,12 @@ fun PlayerOverlay(
     }
     
     fun getFreshPosition(): Float {
-        return (MPVLib.getPropertyDouble("time-pos") ?: 0.0).toFloat()
+        return (mpv.getPropertyDouble("time-pos") ?: 0.0).toFloat()
     }
     
     fun performQuickSeek(seconds: Int) {
-        val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+        val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
+        val duration = mpv.getPropertyDouble("duration") ?: 0.0
         val newPosition = (currentPos + seconds).coerceIn(0.0, duration)
         
         quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
@@ -169,7 +175,7 @@ fun PlayerOverlay(
             showQuickSeekFeedback = false
         }
         
-        MPVLib.command("seek", seconds.toString(), "relative", "exact")
+        mpv.command("seek", seconds.toString(), "relative", "exact")
     }
     
     fun toggleVideoInfo() {
@@ -194,17 +200,17 @@ fun PlayerOverlay(
     }
     
     fun handleTap() {
-        val currentPaused = MPVLib.getPropertyBoolean("pause") ?: false
+        val currentPaused = mpv.getPropertyBoolean("pause") ?: false
         if (currentPaused) {
             coroutineScope.launch {
-                val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-                MPVLib.command("seek", currentPos.toString(), "absolute", "exact")
+                val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
+                mpv.command("seek", currentPos.toString(), "absolute", "exact")
                 delay(100)
-                MPVLib.setPropertyBoolean("pause", false)
+                mpv.setPropertyBoolean("pause", false)
             }
             showPlaybackFeedback("Resume")
         } else {
-            MPVLib.setPropertyBoolean("pause", true)
+            mpv.setPropertyBoolean("pause", true)
             showPlaybackFeedback("Pause")
         }
         if (showSeekbar) {
@@ -224,7 +230,7 @@ fun PlayerOverlay(
             if (isTouching && !isHorizontalSwipe && !isVerticalSwipe) {
                 isLongTap = true
                 isSpeedingUp = true
-                MPVLib.setPropertyDouble("speed", 2.0)
+                mpv.setPropertyDouble("speed", 2.0)
             }
         }
     }
@@ -250,15 +256,15 @@ fun PlayerOverlay(
         isHorizontalSwipe = true
         cancelAutoHide()
         seekStartX = startX
-        seekStartPosition = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-        wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
+        seekStartPosition = mpv.getPropertyDouble("time-pos") ?: 0.0
+        wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
         showSeekbar = true
         showVideoInfo = true
         
         if (wasPlayingBeforeSeek) {
-            MPVLib.setPropertyBoolean("pause", true)
+            mpv.setPropertyBoolean("pause", true)
         }
     }
     
@@ -284,7 +290,7 @@ fun PlayerOverlay(
         val pixelsPerSecond = 2f / 0.032f
         val timeDeltaSeconds = deltaX / pixelsPerSecond
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
-        val duration = MPVLib.getPropertyDouble("duration") ?: 0.0
+        val duration = mpv.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
         seekDirection = if (deltaX > 0) "+" else "-"
@@ -295,13 +301,13 @@ fun PlayerOverlay(
     
     fun endHorizontalSeeking() {
         if (isSeeking) {
-            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: seekStartPosition
+            val currentPos = mpv.getPropertyDouble("time-pos") ?: seekStartPosition
             performRealTimeSeek(currentPos)
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
                     delay(100)
-                    MPVLib.setPropertyBoolean("pause", false)
+                    mpv.setPropertyBoolean("pause", false)
                 }
             }
             
@@ -328,7 +334,7 @@ fun PlayerOverlay(
         if (isLongTap) {
             isLongTap = false
             isSpeedingUp = false
-            MPVLib.setPropertyDouble("speed", 1.0)
+            mpv.setPropertyDouble("speed", 1.0)
         } else if (isHorizontalSwipe) {
             endHorizontalSeeking()
             isHorizontalSwipe = false
@@ -354,16 +360,16 @@ fun PlayerOverlay(
         val intent = (context as? android.app.Activity)?.intent
         fileName = when {
             intent?.action == Intent.ACTION_SEND -> {
-                getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context)
+                getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context, mpv)
             }
             intent?.action == Intent.ACTION_VIEW -> {
-                getFileNameFromUri(intent.data, context)
+                getFileNameFromUri(intent.data, context, mpv)
             }
             else -> {
-                getBestAvailableFileName(context)
+                getBestAvailableFileName(context, mpv)
             }
         }
-        val title = MPVLib.getPropertyString("media-title") ?: "RTFP Player"
+        val title = mpv.getPropertyString("media-title") ?: "RTFP Player"
         videoTitle = title
         
         showVideoInfo = true
@@ -377,17 +383,17 @@ fun PlayerOverlay(
     
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
-            MPVLib.setPropertyDouble("speed", 2.0)
+            mpv.setPropertyDouble("speed", 2.0)
         } else {
-            MPVLib.setPropertyDouble("speed", 1.0)
+            mpv.setPropertyDouble("speed", 1.0)
         }
     }
     
     LaunchedEffect(Unit) {
         var lastSeconds = -1
         while (isActive) {
-            val currentPos = MPVLib.getPropertyDouble("time-pos") ?: 0.0
-            val duration = MPVLib.getPropertyDouble("duration") ?: 1.0
+            val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
+            val duration = mpv.getPropertyDouble("duration") ?: 1.0
             val currentSeconds = currentPos.toInt()
             if (isSeeking) {
                 currentTime = seekTargetTime
@@ -413,13 +419,13 @@ fun PlayerOverlay(
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
-            wasPlayingBeforeSeek = MPVLib.getPropertyBoolean("pause") == false
+            wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
             showSeekTime = true
             showSeekbar = true
             showVideoInfo = true
             
             if (wasPlayingBeforeSeek) {
-                MPVLib.setPropertyBoolean("pause", true)
+                mpv.setPropertyBoolean("pause", true)
             }
         }
         isDragging = true
@@ -437,7 +443,7 @@ fun PlayerOverlay(
         if (wasPlayingBeforeSeek) {
             coroutineScope.launch {
                 delay(100)
-                MPVLib.setPropertyBoolean("pause", false)
+                mpv.setPropertyBoolean("pause", false)
             }
         }
         isSeeking = false
@@ -692,13 +698,13 @@ private fun formatTimeSimple(seconds: Double): String {
     return if (hours > 0) String.format("%02d:%02d:%02d", hours, minutes, secs) else String.format("%02d:%02d", minutes, secs)
 }
 
-private fun getFileNameFromUri(uri: Uri?, context: android.content.Context): String {
-    if (uri == null) return getBestAvailableFileName(context)
+private fun getFileNameFromUri(uri: Uri?, context: android.content.Context, mpv: `is`.xyz.mpv.MPV): String {
+    if (uri == null) return getBestAvailableFileName(context, mpv)
     return when {
-        uri.scheme == "file" -> uri.lastPathSegment?.substringBeforeLast(".") ?: getBestAvailableFileName(context)
-        uri.scheme == "content" -> getDisplayNameFromContentUri(uri, context) ?: getBestAvailableFileName(context)
+        uri.scheme == "file" -> uri.lastPathSegment?.substringBeforeLast(".") ?: getBestAvailableFileName(context, mpv)
+        uri.scheme == "content" -> getDisplayNameFromContentUri(uri, context) ?: getBestAvailableFileName(context, mpv)
         uri.scheme in listOf("http", "https") -> uri.lastPathSegment?.substringBeforeLast(".") ?: "Online Video"
-        else -> getBestAvailableFileName(context)
+        else -> getBestAvailableFileName(context, mpv)
     }
 }
 
@@ -714,10 +720,10 @@ private fun getDisplayNameFromContentUri(uri: Uri, context: android.content.Cont
     } catch (e: Exception) { null }
 }
 
-private fun getBestAvailableFileName(context: android.content.Context): String {
-    val mediaTitle = MPVLib.getPropertyString("media-title")
+private fun getBestAvailableFileName(context: android.content.Context, mpv: `is`.xyz.mpv.MPV): String {
+    val mediaTitle = mpv.getPropertyString("media-title")
     if (mediaTitle != null && mediaTitle != "Video" && mediaTitle.isNotBlank()) return mediaTitle.substringBeforeLast(".")
-    val mpvPath = MPVLib.getPropertyString("path")
+    val mpvPath = mpv.getPropertyString("path")
     if (mpvPath != null && mpvPath.isNotBlank()) return mpvPath.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "Video" }
     return "RTFP Player"
 }
