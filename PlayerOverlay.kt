@@ -41,6 +41,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlin.math.abs
 
+@androidx.compose.foundation.ExperimentalFoundationApi
 @Composable
 fun PlayerOverlay(
     viewModel: PlayerViewModel,
