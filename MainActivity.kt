@@ -1,101 +1,73 @@
 package com.rtfp.player
 
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.view.View
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
 class MainActivity : ComponentActivity() {
-    private var currentVideoPath: String? = null
-    private var savedPosition: Long = 0
-    private var doubleBackToExitPressedOnce = false
-    private val handler = Handler(Looper.getMainLooper())
+    
+    private var videoPath: String? = null
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Restore state if available
-        savedInstanceState?.let {
-            savedPosition = it.getLong("position", 0)
-            currentVideoPath = it.getString("videoPath")
+        // Get video path from intent
+        videoPath = when (intent?.action) {
+            Intent.ACTION_VIEW -> intent.data?.toString()
+            Intent.ACTION_SEND -> intent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM)?.toString()
+            else -> null
         }
         
-        // Handle intent
-        handleIntent(intent)
+        // Setup fullscreen immersive mode
+        setupFullscreen()
+        
+        // Keep screen on while activity is visible
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         
         setContent {
             MaterialTheme {
                 PlayerScreen(
-                    videoPath = currentVideoPath,
-                    initialPosition = savedPosition,
-                    onPositionChange = { position ->
-                        savedPosition = position
+                    videoPath = videoPath,
+                    onVideoLoaded = { width, height ->
+                        setOrientationForVideo(width, height)
                     }
                 )
             }
         }
     }
     
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        // New video = reset position and play from start
-        savedPosition = 0
-        handleIntent(intent)
-    }
-    
-    private fun handleIntent(intent: Intent) {
-        currentVideoPath = when (intent?.action) {
-            Intent.ACTION_VIEW -> intent.data?.toString()
-            Intent.ACTION_SEND -> intent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM)?.toString()
-            else -> null
-        }
-    }
-    
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        outState.putLong("position", savedPosition)
-        outState.putString("videoPath", currentVideoPath)
-    }
-    
-    override fun onBackPressed() {
-        if (doubleBackToExitPressedOnce) {
-            super.onBackPressed()
-            return
-        }
+    private fun setupFullscreen() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         
-        doubleBackToExitPressedOnce = true
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         
-        // Show message or just handle pause through lifecycle
-        // The pause will be handled by ON_PAUSE event in PlayerScreen
-        
-        lifecycleScope.launch {
-            delay(200)
-            doubleBackToExitPressedOnce = false
+        window.decorView.setOnSystemUiVisibilityChangeListener { visibility ->
+            if (visibility and View.SYSTEM_UI_FLAG_FULLSCREEN == 0) {
+                controller.hide(WindowInsetsCompat.Type.systemBars())
+            }
         }
     }
     
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) {
-            hideSystemUI()
+    private fun setOrientationForVideo(width: Int, height: Int) {
+        requestedOrientation = if (width > height) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         }
     }
     
-    private fun hideSystemUI() {
-        window.decorView.systemUiVisibility = (
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-            or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-            or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-            or View.SYSTEM_UI_FLAG_FULLSCREEN
-        )
+    override fun onResume() {
+        super.onResume()
+        setupFullscreen()
     }
 }
