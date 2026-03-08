@@ -1,1 +1,273 @@
-e
+name: Build RTFP (Minimal)
+
+permissions:
+  contents: write
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 🧾 Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: ⚙️ Setup JDK 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'adopt'
+        java-version: '17'
+    
+    - name: 📁 Create structure
+      run: |
+        mkdir -p app/src/main/java/com/rtfp/player
+        mkdir -p app/src/main/res/values
+        mkdir -p app/src/main/res/mipmap-xxxhdpi
+        mkdir -p gradle/wrapper
+        cp *.kt app/src/main/java/com/rtfp/player/ 2>/dev/null || true
+        echo "✅ Structure created"
+    
+    - name: 📝 Generate settings.gradle
+      run: |
+        cat > settings.gradle << 'EOF'
+        pluginManagement {
+            repositories {
+                google()
+                mavenCentral()
+                gradlePluginPortal()
+            }
+        }
+        dependencyResolutionManagement {
+            repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+            repositories {
+                google()
+                mavenCentral()
+            }
+        }
+        rootProject.name = "RTFP"
+        include ':app'
+        EOF
+    
+    - name: 📝 Generate root build.gradle
+      run: |
+        cat > build.gradle << 'EOF'
+        buildscript {
+            ext.kotlin_version = '1.9.22'
+            repositories {
+                google()
+                mavenCentral()
+            }
+            dependencies {
+                classpath 'com.android.tools.build:gradle:8.2.2'
+                classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+            }
+        }
+        task clean(type: Delete) {
+            delete rootProject.buildDir
+        }
+        EOF
+    
+    - name: 📝 Generate app/build.gradle (arm64-v8a only)
+      run: |
+        cat > app/build.gradle << 'EOF'
+        plugins {
+            id 'com.android.application'
+            id 'org.jetbrains.kotlin.android'
+        }
+
+        android {
+            namespace 'com.rtfp.player'
+            compileSdk 34
+
+            defaultConfig {
+                applicationId "com.rtfp.player"
+                minSdk 30
+                targetSdk 34
+                versionCode 1
+                versionName "1.0"
+                
+                ndk {
+                    abiFilters 'arm64-v8a'
+                }
+            }
+
+            buildTypes {
+                debug {
+                    debuggable true
+                }
+            }
+
+            compileOptions {
+                sourceCompatibility JavaVersion.VERSION_17
+                targetCompatibility JavaVersion.VERSION_17
+            }
+
+            kotlinOptions {
+                jvmTarget = '17'
+            }
+
+            buildFeatures {
+                compose true
+            }
+
+            composeOptions {
+                kotlinCompilerExtensionVersion '1.5.8'
+            }
+
+            packagingOptions {
+                resources {
+                    excludes += '/META-INF/{AL2.0,LGPL2.1}'
+                }
+            }
+        }
+
+        dependencies {
+            implementation 'io.github.abdallahmehiz:mpv-android-lib:0.1.12'
+            implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.22"
+            implementation platform('androidx.compose:compose-bom:2024.02.00')
+            implementation 'androidx.compose.ui:ui'
+            implementation 'androidx.compose.material3:material3'
+            implementation 'androidx.activity:activity-compose:1.8.2'
+            implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
+            implementation 'androidx.core:core-ktx:1.12.0'
+        }
+        EOF
+    
+    - name: 📝 Generate AndroidManifest.xml
+      run: |
+        cat > app/src/main/AndroidManifest.xml << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            
+            <uses-permission android:name="android.permission.INTERNET" />
+            <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+                android:maxSdkVersion="32" />
+            <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+            
+            <application
+                android:allowBackup="true"
+                android:label="RTFP"
+                android:theme="@style/Theme.AppCompat.NoActionBar"
+                android:hardwareAccelerated="true">
+                
+                <activity
+                    android:name=".MainActivity"
+                    android:exported="true"
+                    android:configChanges="orientation|screenSize|keyboardHidden"
+                    android:launchMode="singleTask">
+                    
+                    <intent-filter>
+                        <action android:name="android.intent.action.MAIN" />
+                        <category android:name="android.intent.category.LAUNCHER" />
+                    </intent-filter>
+                    
+                    <intent-filter>
+                        <action android:name="android.intent.action.VIEW" />
+                        <category android:name="android.intent.category.DEFAULT" />
+                        <category android:name="android.intent.category.BROWSABLE" />
+                        <data android:mimeType="video/*" />
+                        <data android:mimeType="audio/*" />
+                    </intent-filter>
+                    
+                    <intent-filter>
+                        <action android:name="android.intent.action.SEND" />
+                        <category android:name="android.intent.category.DEFAULT" />
+                        <data android:mimeType="video/*" />
+                        <data android:mimeType="audio/*" />
+                    </intent-filter>
+                </activity>
+            </application>
+        </manifest>
+        EOF
+    
+    - name: 📝 Generate strings.xml
+      run: |
+        cat > app/src/main/res/values/strings.xml << 'EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <resources>
+            <string name="app_name">RTFP</string>
+        </resources>
+        EOF
+    
+    - name: 📝 Generate gradle.properties
+      run: |
+        cat > gradle.properties << 'EOF'
+        org.gradle.jvmargs=-Xmx2048m
+        android.useAndroidX=true
+        android.enableJetifier=true
+        EOF
+    
+    - name: 🎨 Create launcher icon
+      run: |
+        printf '\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0a\x49\x44\x41\x54\x78\x9c\x63\x00\x01\x00\x00\x05\x00\x01\x0d\x0a\x2d\xb4\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82' > app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+    
+    - name: 🎯 Init Gradle wrapper
+      run: gradle wrapper --gradle-version 8.2
+    
+    - name: 🔓 Make gradlew executable
+      run: chmod +x ./gradlew
+    
+    - name: 🏗️ Build APK
+      id: build
+      run: |
+        set +e
+        ./gradlew assembleDebug --stacktrace 2>&1 | tee build.log
+        echo "exit_code=$?" >> $GITHUB_OUTPUT
+    
+    - name: 📋 Save error log
+      if: failure()
+      run: |
+        echo "## Build Failed" > error.md
+        echo '```' >> error.md
+        grep -E "error|Error|FAILED" build.log | tail -50 >> error.md
+        echo '```' >> error.md
+    
+    - name: 📤 Upload error logs
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: error-log
+        path: |
+          error.md
+          build.log
+    
+    - name: ✍️ Sign APK
+      if: success()
+      run: |
+        sudo apt-get update && sudo apt-get install -y apksigner
+        keytool -genkeypair -v -keystore dummy.keystore -storepass test1234 \
+          -alias key -keypass test1234 -keyalg RSA -keysize 2048 -validity 10000 \
+          -dname "CN=RTFP"
+        
+        APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+        apksigner sign --ks dummy.keystore --ks-key-alias key \
+          --ks-pass pass:test1234 --key-pass pass:test1234 \
+          --out RTFP-signed.apk "$APK"
+        
+        apksigner verify RTFP-signed.apk
+    
+    - name: 📦 Create release ZIP
+      if: success()
+      run: |
+        mkdir -p release
+        cp RTFP-signed.apk release/
+        cp MainActivity.kt PlayerScreen.kt release/
+        mkdir -p release/.github/workflows
+        cp .github/workflows/build.yml release/.github/workflows/
+        cd release
+        zip -r RTFP-complete.zip .
+        mv RTFP-complete.zip ../
+        echo "✅ Created RTFP-complete.zip with APK + sources"
+    
+    - name: 📤 Upload complete package
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: RTFP-complete
+        path: RTFP-complete.zip
