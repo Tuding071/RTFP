@@ -21,12 +21,12 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : MPVView(con
     
     init {
         // Set up options
-        mpv.setOptionString("hwdec", "auto")
-        mpv.setOptionString("keep-open", "yes")  // Stay on last frame when paused
+        mpv?.setOptionString("hwdec", "auto")
+        mpv?.setOptionString("keep-open", "yes")  // Stay on last frame when paused
         
         // Listen for position updates
-        mpv.observeProperty(MPVLib.MPV_PROPERTY_TIME_POS, 1)
-        mpv.setOnPropertyChangeListener { property, value ->
+        mpv?.observeProperty(MPVLib.MPV_PROPERTY_TIME_POS, 1)
+        mpv?.setOnPropertyChangeListener { property, value ->
             if (property == MPVLib.MPV_PROPERTY_TIME_POS) {
                 (value as? Double)?.let {
                     onPositionUpdate?.invoke((it * 1000).toLong())
@@ -37,14 +37,14 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : MPVView(con
     
     fun pause() {
         if (!isPaused) {
-            mpv.command("set", "pause", "yes")
+            mpv?.command("set", "pause", "yes")
             isPaused = true
         }
     }
     
     fun play() {
         if (isPaused) {
-            mpv.command("set", "pause", "no")
+            mpv?.command("set", "pause", "no")
             isPaused = false
         }
     }
@@ -75,26 +75,16 @@ fun PlayerScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     
-    var mpvView by remember { mutableStateOf<SimpleMPVView?>(null) }
-    var isPaused by remember { mutableStateOf(false) }
-    
-    // Handle back button pause
-    LaunchedEffect(Unit) {
-        // This will be called from MainActivity's back press via some mechanism
-        // For now, we'll handle it through lifecycle
-    }
+    val mpvView = remember { mutableStateOf<SimpleMPVView?>(null) }
     
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_PAUSE -> {
-                    mpvView?.pause()
-                }
-                Lifecycle.Event.ON_RESUME -> {
-                    // Stay paused, just ensure view is ready
+                    mpvView.value?.pause()
                 }
                 Lifecycle.Event.ON_DESTROY -> {
-                    mpvView?.mpv?.command("quit")
+                    mpvView.value?.mpv?.command("quit")
                 }
                 else -> {}
             }
@@ -116,24 +106,18 @@ fun PlayerScreen(
                 )
                 initialize(ctx.filesDir.path, ctx.cacheDir.path)
                 onPositionUpdate = onPositionChange
-                mpvView = this
+                mpvView.value = this
             }
         },
         update = { view ->
             videoPath?.let { path ->
-                if (view.isPlaying()) {
-                    view.pause()
-                }
                 view.playFile(path)
                 if (initialPosition > 0) {
-                    view.mpv.command("seek", (initialPosition / 1000.0).toString(), "absolute")
+                    view.mpv?.command("seek", (initialPosition / 1000.0).toString(), "absolute")
                 }
                 view.pause() // Start paused
             }
         },
-        modifier = Modifier.fillSizeMax()
+        modifier = Modifier.fillMaxSize()
     )
 }
-
-// Extension to fix typo in original
-fun Modifier.fillSizeMax() = this.fillMaxSize()
