@@ -54,7 +54,6 @@ jobs:
             repositories {
                 google()
                 mavenCentral()
-                maven { url 'https://jitpack.io' }
             }
         }
         rootProject.name = "RTFP"
@@ -139,8 +138,8 @@ jobs:
         }
 
         dependencies {
-            // MPV Android Library
-            implementation 'io.github.abdallahmehiz:mpv-android-lib:1.0.0'
+            // MPV Android Library (from Maven Central)
+            implementation 'io.github.abdallahmehiz:mpv-android-lib:0.1.12'
             
             // Kotlin
             implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.22"
