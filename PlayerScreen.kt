@@ -137,6 +137,7 @@ fun PlayerScreen(
     }
 }
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun PlayerOverlay(
     mpv: `is`.xyz.mpv.MPV,
