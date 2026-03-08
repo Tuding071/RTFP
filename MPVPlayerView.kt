@@ -77,6 +77,11 @@ class MPVPlayerView @JvmOverloads constructor(
         }
     }
 
+    override fun observeProperties() {
+        // Required abstract method - observe MPV properties
+        // This is called by the library to set up property observers
+    }
+
     /**
      * Initialize the player with config and cache directories
      */
@@ -93,7 +98,7 @@ class MPVPlayerView @JvmOverloads constructor(
     /**
      * Play a video file or URL
      */
-    fun playFile(path: String) {
+    override fun playFile(path: String) {
         try {
             mpv.command("loadfile", path)
             Log.d(TAG, "Playing file: $path")
@@ -102,6 +107,11 @@ class MPVPlayerView @JvmOverloads constructor(
             throw e
         }
     }
+
+    /**
+     * Get MPV instance for property access
+     */
+    fun getMPV() = mpv
 
     /**
      * Cleanup resources
