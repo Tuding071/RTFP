@@ -690,7 +690,6 @@ fun SimpleDraggableProgressBar(
     var dragStartX by remember { mutableStateOf(0f) }
     var dragStartPosition by remember { mutableStateOf(0f) }
     var hasPassedThreshold by remember { mutableStateOf(false) }
-    var thresholdStartX by remember { mutableStateOf(0f) }
     
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
@@ -722,7 +721,6 @@ fun SimpleDraggableProgressBar(
                             dragStartX = offset.x
                             dragStartPosition = getFreshPosition()
                             hasPassedThreshold = false
-                            thresholdStartX = 0f
                         },
                         onDrag = { change, _ ->
                             change.consume()
@@ -732,21 +730,19 @@ fun SimpleDraggableProgressBar(
                             if (!hasPassedThreshold) {
                                 if (totalMovementX > movementThresholdPx) {
                                     hasPassedThreshold = true
-                                    thresholdStartX = currentX
                                 } else {
                                     return@detectDragGestures
                                 }
                             }
                             
-                            val effectiveStartX = if (hasPassedThreshold) thresholdStartX else dragStartX
-                            val deltaX = currentX - effectiveStartX
+                            // Calculate from original drag start position
+                            val deltaX = currentX - dragStartX
                             val deltaPosition = (deltaX / size.width) * duration
                             val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
                             onValueChange(newPosition)
                         },
                         onDragEnd = {
                             hasPassedThreshold = false
-                            thresholdStartX = 0f
                             onValueChangeFinished()
                         }
                     )
