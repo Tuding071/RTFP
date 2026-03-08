@@ -1,5 +1,8 @@
 name: Build RTFP APK
 
+permissions:
+  contents: write
+
 on:
   push:
     branches: [ main, master ]
@@ -12,32 +15,34 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout repository
+    - name: 🧾 Checkout repository
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
     
-    - name: Set up JDK 17
+    - name: ⚙️ Set up JDK 17
       uses: actions/setup-java@v4
       with:
-        distribution: 'temurin'
+        distribution: 'adopt'
         java-version: '17'
+        cache: 'gradle'
     
-    - name: Generate project structure
+    - name: 📁 Generate project structure
       run: |
         # Create directory structure
         mkdir -p app/src/main/java/com/rtfp/player
         mkdir -p app/src/main/res/values
-        mkdir -p app/src/main/res/drawable
         mkdir -p app/src/main/res/mipmap-hdpi
         mkdir -p app/src/main/res/mipmap-mdpi
         mkdir -p app/src/main/res/mipmap-xhdpi
         mkdir -p app/src/main/res/mipmap-xxhdpi
         mkdir -p app/src/main/res/mipmap-xxxhdpi
+        mkdir -p gradle/wrapper
         
         # Copy all .kt files from root to package directory
-        cp *.kt app/src/main/java/com/rtfp/player/ || echo "No .kt files found in root"
+        cp *.kt app/src/main/java/com/rtfp/player/ 2>/dev/null || echo "No .kt files found in root"
         
-        echo "✓ Project structure created"
-        echo "✓ Kotlin files copied"
+        echo "✅ Project structure created"
     
     - name: Generate settings.gradle
       run: |
@@ -257,20 +262,17 @@ jobs:
         EOF
         echo "✓ themes.xml generated"
     
-    - name: Generate launcher icon
+    - name: 🎨 Generate launcher icon
       run: |
-        # Create a simple launcher icon using ImageMagick
-        # For now, create placeholder icons
-        echo "Creating launcher icons..."
+        # Create placeholder PNG files for launcher icons
+        echo "Creating placeholder launcher icons..."
         for dpi in hdpi mdpi xhdpi xxhdpi xxxhdpi; do
-          mkdir -p app/src/main/res/mipmap-$dpi
-          # Create a simple colored square as placeholder
-          # In a real scenario, you'd provide actual icon files
-          touch app/src/main/res/mipmap-$dpi/ic_launcher.png
+          # Create empty PNG file (1x1 transparent pixel)
+          printf '\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0a\x49\x44\x41\x54\x78\x9c\x63\x00\x01\x00\x00\x05\x00\x01\x0d\x0a\x2d\xb4\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82' > app/src/main/res/mipmap-$dpi/ic_launcher.png
         done
-        echo "✓ Launcher icons created (placeholders)"
+        echo "✅ Launcher icons created"
     
-    - name: Generate gradle.properties
+    - name: 📝 Generate gradle.properties
       run: |
         cat > gradle.properties << 'EOF'
         org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
@@ -279,50 +281,61 @@ jobs:
         kotlin.code.style=official
         org.gradle.parallel=true
         org.gradle.caching=true
+        android.defaults.buildfeatures.buildconfig=true
         EOF
-        echo "✓ gradle.properties generated"
+        echo "✅ gradle.properties generated"
     
-    - name: Generate proguard-rules.pro
+    - name: 🔧 Generate proguard-rules.pro
       run: |
         cat > app/proguard-rules.pro << 'EOF'
-        # Add project specific ProGuard rules here.
+        # Keep MPV library
         -keep class is.xyz.mpv.** { *; }
         -keep class com.rtfp.player.** { *; }
         -dontwarn is.xyz.mpv.**
         EOF
-        echo "✓ proguard-rules.pro generated"
+        echo "✅ proguard-rules.pro generated"
     
-    - name: Grant execute permission for gradlew
+    - name: 🎯 Initialize Gradle Wrapper
       run: |
-        # Download gradle wrapper if not exists
-        if [ ! -f "gradlew" ]; then
-          gradle wrapper --gradle-version 8.2
-        fi
-        chmod +x gradlew
+        # Generate gradle wrapper using gradle command
+        gradle wrapper --gradle-version 8.2 --distribution-type bin
+        echo "✅ Gradle wrapper initialized"
     
-    - name: Build Debug APK
+    - name: 🔓 Make gradlew executable
+      run: chmod +x ./gradlew
+    
+    - name: 🏗️ Build Debug APK (ARM64 only)
       run: ./gradlew assembleDebug --stacktrace
     
-    - name: Upload APK
+    - name: 📁 Get build info
+      id: build_info
+      run: |
+        commit_count=$(git rev-list --count HEAD)
+        echo "commit_count=$commit_count" >> $GITHUB_OUTPUT
+        echo "✅ Commit count: $commit_count"
+    
+    - name: 📤 Upload Debug APK
       uses: actions/upload-artifact@v4
       with:
-        name: RTFP-debug
-        path: app/build/outputs/apk/debug/app-debug.apk
+        name: RTFP-debug-r${{ steps.build_info.outputs.commit_count }}
+        path: app/build/outputs/apk/debug/*.apk
         retention-days: 30
     
-    - name: Build summary
+    - name: 📊 Build summary
       run: |
         echo "## 🎉 Build Successful!" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**RTFP Player** has been built successfully!" >> $GITHUB_STEP_SUMMARY
+        echo "**RTFP Player** debug APK has been built!" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### Features:" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Single tap: Pause/Resume + Toggle UI" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Long press: 2x Speed playback" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Horizontal swipe: Real-time seeking" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Vertical swipe: Quick seek ±5s" >> $GITHUB_STEP_SUMMARY
-        echo "- ✅ Progress bar: Drag to seek" >> $GITHUB_STEP_SUMMARY
+        echo "### ✨ Features:" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Single tap → Pause/Resume + Toggle UI" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Long press → 2x Speed playback" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Horizontal swipe → Real-time seeking" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Vertical swipe → Quick seek ±5s" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Progress bar drag → Seek with threshold" >> $GITHUB_STEP_SUMMARY
         echo "- ✅ Auto-hide UI after 4s" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### Download:" >> $GITHUB_STEP_SUMMARY
+        echo "### 📦 Download:" >> $GITHUB_STEP_SUMMARY
         echo "Download the APK from the **Artifacts** section above." >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Build:** r${{ steps.build_info.outputs.commit_count }}" >> $GITHUB_STEP_SUMMARY
