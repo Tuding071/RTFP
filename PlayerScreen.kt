@@ -74,6 +74,7 @@ fun PlayerScreen(
         // Player Overlay (gestures and UI)
         PlayerOverlay(
             viewModel = viewModel,
+            mpvPlayerView = mpvPlayerView,
             modifier = Modifier.fillMaxSize()
         )
     }
