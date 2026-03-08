@@ -1,12 +1,9 @@
 name: Build RTFP (Minimal)
 
-permissions:
-  contents: write
-
 on:
+  workflow_dispatch:
   push:
     branches: [ main, master ]
-  workflow_dispatch:
 
 jobs:
   build:
@@ -30,8 +27,12 @@ jobs:
         mkdir -p app/src/main/res/values
         mkdir -p app/src/main/res/mipmap-xxxhdpi
         mkdir -p gradle/wrapper
-        cp *.kt app/src/main/java/com/rtfp/player/ 2>/dev/null || true
         echo "✅ Structure created"
+    
+    - name: 📝 Copy Kotlin files
+      run: |
+        cp *.kt app/src/main/java/com/rtfp/player/ 2>/dev/null || true
+        echo "✅ Kotlin files copied"
     
     - name: 📝 Generate settings.gradle
       run: |
@@ -73,7 +74,7 @@ jobs:
         }
         EOF
     
-    - name: 📝 Generate app/build.gradle (MINIMAL)
+    - name: 📝 Generate app/build.gradle (ARM64 ONLY)
       run: |
         cat > app/build.gradle << 'EOF'
         plugins {
@@ -91,6 +92,10 @@ jobs:
                 targetSdk 34
                 versionCode 1
                 versionName "1.0"
+                
+                ndk {
+                    abiFilters 'arm64-v8a'
+                }
             }
 
             buildTypes {
@@ -130,10 +135,12 @@ jobs:
             implementation 'androidx.compose.ui:ui'
             implementation 'androidx.compose.material3:material3'
             implementation 'androidx.activity:activity-compose:1.8.2'
+            implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.7.0'
+            implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0'
         }
         EOF
     
-    - name: 📝 Generate AndroidManifest.xml (MINIMAL)
+    - name: 📝 Generate AndroidManifest.xml
       run: |
         cat > app/src/main/AndroidManifest.xml << 'EOF'
         <?xml version="1.0" encoding="utf-8"?>
@@ -151,7 +158,7 @@ jobs:
                 <activity
                     android:name=".MainActivity"
                     android:exported="true"
-                    android:configChanges="orientation|screenSize"
+                    android:configChanges="orientation|screenSize|keyboardHidden"
                     android:screenOrientation="landscape">
                     
                     <intent-filter>
@@ -202,7 +209,7 @@ jobs:
     - name: 🔓 Make gradlew executable
       run: chmod +x ./gradlew
     
-    - name: 🏗️ Build APK
+    - name: 🏗️ Build APK (ARM64)
       id: build
       run: |
         set +e
@@ -241,9 +248,12 @@ jobs:
         
         apksigner verify RTFP-signed.apk
     
-    - name: 📤 Upload APK
+    - name: 📤 Upload APK and Source
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: RTFP-apk
-        path: RTFP-signed.apk
+        name: RTFP-build
+        path: |
+          RTFP-signed.apk
+          *.kt
+          .github/workflows/build.yml
