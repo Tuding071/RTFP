@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.core.view.WindowCompat
@@ -15,22 +16,26 @@ import androidx.core.view.WindowInsetsControllerCompat
 class MainActivity : ComponentActivity() {
     
     private var videoPath: String? = null
+    private var shouldFinishOnBack = true
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
         // Get video path from intent
-        videoPath = when (intent?.action) {
-            Intent.ACTION_VIEW -> intent.data?.toString()
-            Intent.ACTION_SEND -> intent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM)?.toString()
-            else -> null
-        }
+        videoPath = extractVideoPath(intent)
         
         // Setup fullscreen immersive mode
         setupFullscreen()
         
         // Keep screen on while activity is visible
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        
+        // Handle back button - always finish (destroy) the activity
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                finish() // Destroy activity completely
+            }
+        })
         
         setContent {
             MaterialTheme {
@@ -41,6 +46,21 @@ class MainActivity : ComponentActivity() {
                     }
                 )
             }
+        }
+    }
+    
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // New video opened - recreate activity with new intent
+        setIntent(intent)
+        recreate()
+    }
+    
+    private fun extractVideoPath(intent: Intent?): String? {
+        return when (intent?.action) {
+            Intent.ACTION_VIEW -> intent.data?.toString()
+            Intent.ACTION_SEND -> intent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM)?.toString()
+            else -> null
         }
     }
     
@@ -69,5 +89,11 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         setupFullscreen()
+    }
+    
+    override fun onDestroy() {
+        super.onDestroy()
+        // Clear video path to prevent reuse
+        videoPath = null
     }
 }
