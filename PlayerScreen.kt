@@ -664,6 +664,7 @@ fun PlayerOverlay(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun SimpleDraggableProgressBar(
     position: Float,
