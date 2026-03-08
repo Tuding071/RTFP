@@ -1,4 +1,4 @@
-name: Build RTFP APK
+name: Build RTFP APK (Signed)
 
 permissions:
   contents: write
@@ -25,7 +25,6 @@ jobs:
       with:
         distribution: 'adopt'
         java-version: '17'
-        cache: 'gradle'
     
     - name: 📁 Generate project structure
       run: |
@@ -304,28 +303,87 @@ jobs:
     - name: 🔓 Make gradlew executable
       run: chmod +x ./gradlew
     
-    - name: 🏗️ Build Debug APK (ARM64 only)
+    - name: 🏗️ Build Debug APK
       run: ./gradlew assembleDebug --stacktrace
+    
+    - name: 🔧 Install apksigner
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y apksigner
+        echo "✅ apksigner installed"
+    
+    - name: 🔑 Create dummy keystore
+      run: |
+        keytool -genkeypair -v \
+          -keystore dummy.keystore \
+          -storepass test1234 \
+          -alias dummykey \
+          -keypass test1234 \
+          -dname "CN=RTFP, OU=Player, O=RTFP, L=Test, S=Test, C=PH" \
+          -keyalg RSA \
+          -keysize 2048 \
+          -validity 10000
+        echo "✅ Dummy keystore created"
+    
+    - name: ✍️ Sign APK with dummy keystore
+      run: |
+        # Find the debug APK
+        DEBUG_APK=$(find app/build/outputs/apk/debug -name "*.apk" -type f | head -n 1)
+        
+        if [ -z "$DEBUG_APK" ]; then
+          echo "❌ No debug APK found!"
+          find app/build/outputs/apk -type f
+          exit 1
+        fi
+        
+        echo "📦 Found APK: $DEBUG_APK"
+        
+        # Sign it
+        apksigner sign \
+          --ks dummy.keystore \
+          --ks-key-alias dummykey \
+          --ks-pass pass:test1234 \
+          --key-pass pass:test1234 \
+          --out RTFP-signed.apk \
+          "$DEBUG_APK"
+        
+        echo "✅ APK signed successfully"
+    
+    - name: ✅ Verify APK signature
+      run: |
+        apksigner verify RTFP-signed.apk
+        echo "✅ APK signature verified"
     
     - name: 📁 Get build info
       id: build_info
       run: |
         commit_count=$(git rev-list --count HEAD)
+        build_time=$(TZ='Asia/Manila' date +'%Y%m%d_%I%M%p')
         echo "commit_count=$commit_count" >> $GITHUB_OUTPUT
-        echo "✅ Commit count: $commit_count"
+        echo "build_time=$build_time" >> $GITHUB_OUTPUT
+        
+        # Rename APK with timestamp
+        mv RTFP-signed.apk "RTFP_${build_time}.apk"
+        
+        echo "✅ Build: r${commit_count} at ${build_time}"
     
-    - name: 📤 Upload Debug APK
+    - name: 📤 Upload Signed APK
       uses: actions/upload-artifact@v4
       with:
-        name: RTFP-debug-r${{ steps.build_info.outputs.commit_count }}
-        path: app/build/outputs/apk/debug/*.apk
+        name: RTFP-r${{ steps.build_info.outputs.commit_count }}-${{ steps.build_info.outputs.build_time }}
+        path: RTFP_*.apk
         retention-days: 30
     
     - name: 📊 Build summary
       run: |
         echo "## 🎉 Build Successful!" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**RTFP Player** debug APK has been built!" >> $GITHUB_STEP_SUMMARY
+        echo "**RTFP Player** signed APK ready to install!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📦 Build Info:" >> $GITHUB_STEP_SUMMARY
+        echo "- **Build:** r${{ steps.build_info.outputs.commit_count }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Time:** ${{ steps.build_info.outputs.build_time }} (PH)" >> $GITHUB_STEP_SUMMARY
+        echo "- **Signed:** ✅ Yes (dummy keystore)" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### ✨ Features:" >> $GITHUB_STEP_SUMMARY
         echo "- ✅ Single tap → Pause/Resume + Toggle UI" >> $GITHUB_STEP_SUMMARY
@@ -335,7 +393,5 @@ jobs:
         echo "- ✅ Progress bar drag → Seek with threshold" >> $GITHUB_STEP_SUMMARY
         echo "- ✅ Auto-hide UI after 4s" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 📦 Download:" >> $GITHUB_STEP_SUMMARY
-        echo "Download the APK from the **Artifacts** section above." >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Build:** r${{ steps.build_info.outputs.commit_count }}" >> $GITHUB_STEP_SUMMARY
+        echo "### 📥 Download:" >> $GITHUB_STEP_SUMMARY
+        echo "Download **RTFP_${{ steps.build_info.outputs.build_time }}.apk** from Artifacts above." >> $GITHUB_STEP_SUMMARY
