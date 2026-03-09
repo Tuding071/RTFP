@@ -36,31 +36,22 @@ import kotlin.math.sign
 class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView(context, attrs) {
     
     override fun initOptions() {
-        // ✅ HARDWARE DECODING - Use GPU for smooth playback!
-        mpv.setOptionString("hwdec", "auto-safe")
-        mpv.setOptionString("hwdec-codecs", "all")
-        
+        // ✅ SOFTWARE DECODING - Works better on your device!
+        mpv.setOptionString("hwdec", "no")
         mpv.setOptionString("vo", "gpu")
-        mpv.setOptionString("gpu-context", "android")
-        
-        // ✅ SMOOTH PLAYBACK - But keep all frames visible
-        mpv.setOptionString("video-sync", "audio")
-        mpv.setOptionString("interpolation", "yes")
-        mpv.setOptionString("tscale", "oversample")
-        
         mpv.setOptionString("profile", "fast")
         mpv.setOptionString("keepaspect", "yes")
     }
 
     override fun postInitOptions() {
-        // ✅ NO FRAMEDROP - You want to see all frames!
+        // ✅ NO FRAMEDROP - See all frames during seeking!
         mpv.setOptionString("framedrop", "no")
         
-        // ✅ THREADING - Optimized for performance
+        // ✅ OPTIMIZED THREADING
         mpv.setOptionString("vd-lavc-threads", "4")
         mpv.setOptionString("demuxer-lavf-threads", "4")
         
-        // ✅ CACHE - Optimized for smooth seeking
+        // ✅ BETTER CACHE - Smoother seeking without hardware decode
         mpv.setOptionString("cache", "yes")
         mpv.setOptionString("demuxer-max-bytes", "100M")
         mpv.setOptionString("demuxer-max-back-bytes", "50M")
@@ -69,26 +60,23 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         // ✅ SEEKING - Show all frames during horizontal drag!
         mpv.setOptionString("hr-seek", "yes")
         mpv.setOptionString("hr-seek-framedrop", "no")
-        mpv.setOptionString("hr-seek-demuxer-offset", "0")
         
-        // ✅ DECODING - Fast but accurate
+        // ✅ FAST SOFTWARE DECODING
         mpv.setOptionString("vd-lavc-fast", "yes")
         mpv.setOptionString("vd-lavc-skiploopfilter", "nonkey")
         mpv.setOptionString("vd-lavc-skipidct", "nonkey")
         
-        // ✅ GPU
+        // ✅ GPU ASSIST (even with software decode)
         mpv.setOptionString("opengl-pbo", "yes")
         mpv.setOptionString("gpu-dumb-mode", "no")
         
         // ✅ AUDIO
         mpv.setOptionString("audio-channels", "auto")
         mpv.setOptionString("audio-samplerate", "auto")
-        mpv.setOptionString("audio-buffer", "0.2")
         
         // ✅ VIDEO
         mpv.setOptionString("deband", "no")
         mpv.setOptionString("video-aspect-override", "no")
-        mpv.setOptionString("video-unscaled", "no")
     }
 
     override fun observeProperties() {}
