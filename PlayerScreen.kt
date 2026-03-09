@@ -36,41 +36,59 @@ import kotlin.math.sign
 class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView(context, attrs) {
     
     override fun initOptions() {
-        mpv.setOptionString("hwdec", "no")
+        // ✅ HARDWARE DECODING - Use GPU for smooth playback!
+        mpv.setOptionString("hwdec", "auto-safe")
+        mpv.setOptionString("hwdec-codecs", "all")
+        
         mpv.setOptionString("vo", "gpu")
+        mpv.setOptionString("gpu-context", "android")
+        
+        // ✅ SMOOTH PLAYBACK - But keep all frames visible
+        mpv.setOptionString("video-sync", "audio")
+        mpv.setOptionString("interpolation", "yes")
+        mpv.setOptionString("tscale", "oversample")
+        
         mpv.setOptionString("profile", "fast")
         mpv.setOptionString("keepaspect", "yes")
     }
 
     override fun postInitOptions() {
-        // Performance
-        mpv.setOptionString("vd-lavc-threads", "8")
-        mpv.setOptionString("demuxer-lavf-threads", "4")
-        mpv.setOptionString("cache-initial", "0.5")
-        mpv.setOptionString("video-sync", "display-resample")
-        mpv.setOptionString("untimed", "yes")
+        // ✅ NO FRAMEDROP - You want to see all frames!
+        mpv.setOptionString("framedrop", "no")
         
-        // Seeking
+        // ✅ THREADING - Optimized for performance
+        mpv.setOptionString("vd-lavc-threads", "4")
+        mpv.setOptionString("demuxer-lavf-threads", "4")
+        
+        // ✅ CACHE - Optimized for smooth seeking
+        mpv.setOptionString("cache", "yes")
+        mpv.setOptionString("demuxer-max-bytes", "100M")
+        mpv.setOptionString("demuxer-max-back-bytes", "50M")
+        mpv.setOptionString("demuxer-readahead-secs", "10")
+        
+        // ✅ SEEKING - Show all frames during horizontal drag!
         mpv.setOptionString("hr-seek", "yes")
         mpv.setOptionString("hr-seek-framedrop", "no")
+        mpv.setOptionString("hr-seek-demuxer-offset", "0")
         
-        // Fast decoding
+        // ✅ DECODING - Fast but accurate
         mpv.setOptionString("vd-lavc-fast", "yes")
-        mpv.setOptionString("vd-lavc-skiploopfilter", "all")
-        mpv.setOptionString("vd-lavc-skipidct", "all")
-        mpv.setOptionString("vd-lavc-assemble", "yes")
+        mpv.setOptionString("vd-lavc-skiploopfilter", "nonkey")
+        mpv.setOptionString("vd-lavc-skipidct", "nonkey")
         
-        // GPU
-        mpv.setOptionString("gpu-dumb-mode", "yes")
+        // ✅ GPU
         mpv.setOptionString("opengl-pbo", "yes")
+        mpv.setOptionString("gpu-dumb-mode", "no")
         
-        // Audio
+        // ✅ AUDIO
         mpv.setOptionString("audio-channels", "auto")
         mpv.setOptionString("audio-samplerate", "auto")
+        mpv.setOptionString("audio-buffer", "0.2")
         
-        // Video
+        // ✅ VIDEO
         mpv.setOptionString("deband", "no")
         mpv.setOptionString("video-aspect-override", "no")
+        mpv.setOptionString("video-unscaled", "no")
     }
 
     override fun observeProperties() {}
@@ -137,8 +155,8 @@ fun PlayerScreen(
                             var attempts = 0
                             var duration = 0.0
                             
-                            // Keep checking until we get valid duration
-                            while (duration <= 0 && attempts < 50) { // 5 seconds max
+                            // ✅ OPTIMIZED: Reduced wait time to 2 seconds
+                            while (duration <= 0 && attempts < 20) { // 2 seconds max
                                 delay(100)
                                 duration = mpv.getPropertyDouble("duration") ?: 0.0
                                 attempts++
