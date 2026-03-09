@@ -36,6 +36,18 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
+            // ✅ CRITICAL FIX: Take persistent permission!
+            try {
+                contentResolver.takePersistableUriPermission(
+                    it,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (e: SecurityException) {
+                // Some file providers don't support persistent permissions
+                // but the URI might still work temporarily
+                e.printStackTrace()
+            }
+            
             videoPath = it.toString()
             // Recreate to show PlayerScreen with selected video
             recreate()
