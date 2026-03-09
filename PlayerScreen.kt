@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.AttributeSet
+import android.util.Log
 import android.view.MotionEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -26,7 +27,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import `is`.xyz.mpv.BaseMPVView
+import `is`.xyz.mpv.MPV
 import kotlinx.coroutines.*
+import java.io.File
 import kotlin.math.abs
 
 class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView(context, attrs) {
@@ -80,24 +83,22 @@ fun PlayerScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var mpvView by remember { mutableStateOf<SimpleMPVView?>(null) }
+    var mpvInstance by remember { mutableStateOf<MPV?>(null) }
     var isVideoLoaded by remember { mutableStateOf(false) }
     var savedPosition by remember { mutableStateOf<Double?>(null) }
-    // ADD: Track if duration is valid
-    var isDurationValid by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
     
     // Lifecycle observer for auto-pause with position saving
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_PAUSE -> {
-                    // Save exact position before pausing
                     mpvView?.let { view ->
                         savedPosition = view.mpv.getPropertyDouble("time-pos")
                         view.mpv.setPropertyBoolean("pause", true)
                     }
                 }
                 Lifecycle.Event.ON_RESUME -> {
-                    // Restore exact position when resuming (stay paused)
                     mpvView?.let { view ->
                         savedPosition?.let { pos ->
                             view.mpv.command("seek", pos.toString(), "absolute", "exact")
@@ -120,18 +121,35 @@ fun PlayerScreen(
             factory = { ctx ->
                 SimpleMPVView(ctx).apply {
                     mpvView = this
-                    initialize(ctx.filesDir.path, ctx.cacheDir.path)
+                    mpvInstance = this.mpv
+                    
+                    // Initialize with proper paths
+                    val filesDir = ctx.filesDir.path
+                    val cacheDir = File(ctx.cacheDir, "mpv").apply { mkdirs() }.path
+                    initialize(filesDir, cacheDir)
                     
                     videoPath?.let { path ->
                         playFile(path)
                         
                         // Wait for video to load and get dimensions
-                        val scope = CoroutineScope(Dispatchers.Main)
-                        scope.launch {
-                            delay(500)
+                        coroutineScope.launch {
+                            var attempts = 0
+                            var duration = 0.0
+                            
+                            // Keep checking until we get valid duration
+                            while (duration <= 0 && attempts < 50) { // 5 seconds max
+                                delay(100)
+                                duration = mpv.getPropertyDouble("duration") ?: 0.0
+                                attempts++
+                                Log.d("PlayerDebug", "Checking duration: $duration (attempt $attempts)")
+                            }
+                            
                             val width = mpv.getPropertyInt("width") ?: 0
                             val height = mpv.getPropertyInt("height") ?: 0
-                            if (width > 0 && height > 0) {
+                            
+                            Log.d("PlayerDebug", "Video loaded - Width: $width, Height: $height, Duration: $duration")
+                            
+                            if (width > 0 && height > 0 && duration > 0) {
                                 onVideoLoaded(width, height)
                                 isVideoLoaded = true
                             }
@@ -142,25 +160,21 @@ fun PlayerScreen(
             modifier = Modifier.fillMaxSize()
         )
         
-        // UI Overlay
-        if (isVideoLoaded) {
-            mpvView?.let { view ->
-                PlayerOverlay(
-                    mpv = view.mpv, 
-                    modifier = Modifier.fillMaxSize(),
-                    onDurationValid = { isDurationValid = true } // ADD: Callback when duration is valid
-                )
-            }
+        // UI Overlay - Only show when video is loaded AND we have a valid MPV instance
+        if (isVideoLoaded && mpvInstance != null) {
+            PlayerOverlay(
+                mpv = mpvInstance!!,
+                modifier = Modifier.fillMaxSize()
+            )
         }
     }
 }
 
-@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun PlayerOverlay(
-    mpv: `is`.xyz.mpv.MPV,
-    modifier: Modifier = Modifier,
-    onDurationValid: () -> Unit = {} // ADD: Callback for duration valid
+    mpv: MPV,
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -214,8 +228,27 @@ fun PlayerOverlay(
     var quickSeekFeedbackText by remember { mutableStateOf("") }
     var quickSeekFeedbackJob by remember { mutableStateOf<Job?>(null) }
     
-    // ADD: Track if duration is valid for seekbar
+    // Track if duration is valid for seekbar
     var isDurationValid by remember { mutableStateOf(false) }
+    
+    // Wait for valid duration before starting
+    LaunchedEffect(Unit) {
+        // Wait for duration to be available
+        var duration = 0.0
+        var attempts = 0
+        while (duration <= 1.0 && attempts < 30) { // Wait until duration > 1 second
+            duration = mpv.getPropertyDouble("duration") ?: 0.0
+            if (duration > 1.0) {
+                Log.d("PlayerDebug", "Duration finally available: $duration")
+                seekbarDuration = duration.toFloat()
+                totalTime = formatTimeSimple(duration)
+                isDurationValid = true
+                break
+            }
+            delay(100)
+            attempts++
+        }
+    }
     
     // Utility functions
     fun scheduleSeekbarHide() {
@@ -270,7 +303,6 @@ fun PlayerOverlay(
     fun performQuickSeek(seconds: Int) {
         val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
         val duration = mpv.getPropertyDouble("duration") ?: 0.0
-        val newPosition = (currentPos + seconds).coerceIn(0.0, duration)
         
         quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
         showQuickSeekFeedback = true
@@ -462,40 +494,28 @@ fun PlayerOverlay(
         }
     }
     
-    // Update time - MODIFIED: Wait for valid duration
+    // Update time
     LaunchedEffect(Unit) {
-        // Wait for duration to be valid (more than 1 second)
+        // Wait for duration to be valid
         var duration = mpv.getPropertyDouble("duration") ?: 0.0
         while (duration <= 1.0) {
             delay(100)
             duration = mpv.getPropertyDouble("duration") ?: 0.0
         }
         
-        // Duration is now valid - enable seekbar and notify parent
-        isDurationValid = true
-        onDurationValid()
-        
-        var lastSeconds = -1
+        // Now start updating
         while (isActive) {
             val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
             val currentDuration = mpv.getPropertyDouble("duration") ?: duration
-            val currentSeconds = currentPos.toInt()
             
-            if (isSeeking) {
-                currentTime = seekTargetTime
-                totalTime = formatTimeSimple(currentDuration)
-            } else {
-                if (currentSeconds != lastSeconds) {
-                    currentTime = formatTimeSimple(currentPos)
-                    totalTime = formatTimeSimple(currentDuration)
-                    lastSeconds = currentSeconds
-                }
-            }
-            
-            if (!isDragging) {
+            if (!isSeeking && !isDragging) {
+                // Update both together
+                currentTime = formatTimeSimple(currentPos)
                 seekbarPosition = currentPos.toFloat()
-                seekbarDuration = currentDuration.toFloat()
             }
+            
+            totalTime = formatTimeSimple(currentDuration)
+            seekbarDuration = currentDuration.toFloat()
             
             delay(100)
         }
@@ -610,7 +630,7 @@ fun PlayerOverlay(
             }
         }
         
-        // Seekbar - MODIFIED: Only show draggable seekbar when duration is valid
+        // Seekbar
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -644,7 +664,6 @@ fun PlayerOverlay(
                     }
                     Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
                         if (isDurationValid) {
-                            // Show draggable seekbar only when duration is valid
                             SimpleDraggableProgressBar(
                                 position = seekbarPosition,
                                 duration = seekbarDuration,
@@ -733,12 +752,16 @@ fun SimpleDraggableProgressBar(
     modifier: Modifier = Modifier
 ) {
     var dragStartX by remember { mutableStateOf(0f) }
-    var dragStartPosition by remember { mutableStateOf(0f) }
+    var savedPositionAtTouch by remember { mutableStateOf(0f) }
     var hasPassedThreshold by remember { mutableStateOf(false) }
     
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
+    val safeDuration = if (duration > 0) duration else 1f
+    val safePosition = position.coerceIn(0f, safeDuration)
+    val progressFraction = (safePosition / safeDuration).coerceIn(0f, 1f)
     
     Box(modifier = modifier.height(48.dp)) {
+        // Background bar
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -747,14 +770,16 @@ fun SimpleDraggableProgressBar(
                 .background(Color.Gray.copy(alpha = 0.6f))
         )
         
+        // Progress bar
         Box(
             modifier = Modifier
-                .fillMaxWidth(fraction = if (duration > 0) (position / duration).coerceIn(0f, 1f) else 0f)
+                .fillMaxWidth(fraction = progressFraction)
                 .height(4.dp)
                 .align(Alignment.CenterStart)
                 .background(Color.White)
         )
         
+        // Drag handle area
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -763,8 +788,9 @@ fun SimpleDraggableProgressBar(
                 .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = { offset ->
+                            // Save the starting X and current position
                             dragStartX = offset.x
-                            dragStartPosition = getFreshPosition()
+                            savedPositionAtTouch = getFreshPosition().coerceIn(0f, safeDuration)
                             hasPassedThreshold = false
                         },
                         onDrag = { change, _ ->
@@ -773,19 +799,32 @@ fun SimpleDraggableProgressBar(
                             val totalMovementX = abs(currentX - dragStartX)
                             
                             if (!hasPassedThreshold) {
+                                // Check if we've passed the threshold
                                 if (totalMovementX > movementThresholdPx) {
                                     hasPassedThreshold = true
                                 } else {
+                                    // Still within threshold - do nothing
                                     return@detectDragGestures
                                 }
+                            } else {
+                                // After threshold, calculate from the ORIGINAL saved position
+                                // using the total movement from dragStartX
+                                val deltaX = currentX - dragStartX
+                                val deltaPosition = (deltaX / size.width) * safeDuration
+                                val newPosition = (savedPositionAtTouch + deltaPosition)
+                                    .coerceIn(0f, safeDuration)
+                                
+                                // Only update if position actually changed
+                                if (abs(newPosition - safePosition) > 0.1f) {
+                                    onValueChange(newPosition)
+                                }
                             }
-                            
-                            val deltaX = currentX - dragStartX
-                            val deltaPosition = (deltaX / size.width) * duration
-                            val newPosition = (dragStartPosition + deltaPosition).coerceIn(0f, duration)
-                            onValueChange(newPosition)
                         },
                         onDragEnd = {
+                            hasPassedThreshold = false
+                            onValueChangeFinished()
+                        },
+                        onDragCancel = {
                             hasPassedThreshold = false
                             onValueChangeFinished()
                         }
@@ -807,7 +846,7 @@ private fun formatTimeSimple(seconds: Double): String {
     }
 }
 
-private fun getFileNameFromUri(uri: Uri?, context: Context, mpv: `is`.xyz.mpv.MPV): String {
+private fun getFileNameFromUri(uri: Uri?, context: Context, mpv: MPV): String {
     if (uri == null) return getBestAvailableFileName(context, mpv)
     return when {
         uri.scheme == "file" -> uri.lastPathSegment?.substringBeforeLast(".") ?: getBestAvailableFileName(context, mpv)
@@ -832,7 +871,7 @@ private fun getDisplayNameFromContentUri(uri: Uri, context: Context): String? {
     }
 }
 
-private fun getBestAvailableFileName(context: Context, mpv: `is`.xyz.mpv.MPV): String {
+private fun getBestAvailableFileName(context: Context, mpv: MPV): String {
     val mediaTitle = mpv.getPropertyString("media-title")
     if (mediaTitle != null && mediaTitle != "Video" && mediaTitle.isNotBlank()) {
         return mediaTitle.substringBeforeLast(".")
