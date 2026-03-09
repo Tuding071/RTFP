@@ -5,7 +5,6 @@ import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
-import android.util.Log
 import android.view.View
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -24,7 +23,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -32,17 +30,11 @@ import java.io.File
 
 class MainActivity : ComponentActivity() {
     
-    private var videoPath: String? = null
-    private var showFileManager = true
-    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Get video path from intent if any
-        videoPath = extractVideoPath(intent)
-        showFileManager = videoPath == null
-        
-        Log.d("MainActivity", "onCreate - videoPath: $videoPath, showFileManager: $showFileManager")
+        // Get initial video path from intent (if opened from file manager)
+        val initialVideoPath = extractVideoPath(intent)
         
         // Setup fullscreen immersive mode
         setupFullscreen()
@@ -50,35 +42,42 @@ class MainActivity : ComponentActivity() {
         // Keep screen on while activity is visible
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         
-        // Handle back button
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                if (showFileManager) {
-                    finish()
-                } else {
-                    // Go back to file manager
-                    showFileManager = true
-                    videoPath = null
-                    recreate()
-                }
-            }
-        })
-        
         setContent {
             MaterialTheme {
+                // ✅ STATE MANAGED IN COMPOSE - survives recomposition!
+                var videoPath by remember { mutableStateOf(initialVideoPath) }
+                var showFileManager by remember { mutableStateOf(initialVideoPath == null) }
+                
+                // ✅ BACK BUTTON HANDLER - using Compose state
+                DisposableEffect(showFileManager) {
+                    val callback = object : OnBackPressedCallback(true) {
+                        override fun handleOnBackPressed() {
+                            if (showFileManager) {
+                                finish() // Exit app if on file manager
+                            } else {
+                                // Go back to file manager
+                                showFileManager = true
+                                videoPath = null
+                            }
+                        }
+                    }
+                    onBackPressedDispatcher.addCallback(callback)
+                    
+                    onDispose {
+                        callback.remove()
+                    }
+                }
+                
                 if (showFileManager) {
                     FileManagerScreen(
                         onFileSelected = { path ->
-                            Log.d("MainActivity", "File selected: $path")
-                            // Pass the file path directly - PlayerScreen expects a file path string
-                            videoPath = path
+                            // ✅ FIX: Convert file path to proper URI format
+                            videoPath = "file://$path"
                             showFileManager = false
-                            Log.d("MainActivity", "Switching to player with path: $videoPath")
-                            recreate()
+                            // ✅ NO recreate() needed - just update state!
                         }
                     )
                 } else {
-                    Log.d("MainActivity", "Showing PlayerScreen with path: $videoPath")
                     PlayerScreen(
                         videoPath = videoPath,
                         onVideoLoaded = { width, height ->
@@ -93,23 +92,14 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        videoPath = extractVideoPath(intent)
-        showFileManager = videoPath == null
-        Log.d("MainActivity", "onNewIntent - videoPath: $videoPath, showFileManager: $showFileManager")
+        // New video opened from outside - recreate to reset state
         recreate()
     }
     
     private fun extractVideoPath(intent: Intent?): String? {
         return when (intent?.action) {
             Intent.ACTION_VIEW -> intent.data?.toString()
-            Intent.ACTION_SEND -> {
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)?.toString()
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.toString()
-                }
-            }
+            Intent.ACTION_SEND -> intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.toString()
             else -> null
         }
     }
@@ -120,6 +110,12 @@ class MainActivity : ComponentActivity() {
         val controller = WindowInsetsControllerCompat(window, window.decorView)
         controller.hide(WindowInsetsCompat.Type.systemBars())
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        
+        window.decorView.setOnSystemUiVisibilityChangeListener { visibility ->
+            if (visibility and View.SYSTEM_UI_FLAG_FULLSCREEN == 0) {
+                controller.hide(WindowInsetsCompat.Type.systemBars())
+            }
+        }
     }
     
     private fun setOrientationForVideo(width: Int, height: Int) {
@@ -133,11 +129,6 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         setupFullscreen()
-    }
-    
-    override fun onDestroy() {
-        super.onDestroy()
-        videoPath = null
     }
 }
 
@@ -192,7 +183,7 @@ fun FileManagerScreen(
                 
                 if (currentPath != null) {
                     Text(
-                        text = "Up",
+                        text = "⬆ Up",
                         color = Color.White,
                         fontSize = 16.sp,
                         modifier = Modifier
@@ -220,7 +211,7 @@ fun FileManagerScreen(
                         if (file.isDirectory) {
                             currentPath = File(file.path)
                         } else {
-                            // Pass the file path directly
+                            // ✅ Pass file path - MainActivity will add "file://" prefix
                             onFileSelected(file.path)
                         }
                     }
@@ -242,11 +233,10 @@ fun FileListItem(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Simple indicator for folder vs file
+        // Icon indicator for folder vs file
         Text(
-            text = if (file.isDirectory) "[FOLDER]" else "[FILE]",
-            color = if (file.isDirectory) Color(0xFF4CAF50) else Color(0xFF2196F3),
-            fontSize = 12.sp,
+            text = if (file.isDirectory) "📁" else "🎬",
+            fontSize = 20.sp,
             modifier = Modifier.padding(end = 12.dp)
         )
         
@@ -288,7 +278,7 @@ fun getStorageRoots(): List<FileItem> {
 fun loadFiles(directory: File): List<FileItem> {
     if (!directory.exists() || !directory.isDirectory) return emptyList()
     
-    val videoExtensions = setOf(".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".3gp", ".mpg", ".mpeg")
+    val videoExtensions = setOf(".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".3gp")
     
     return directory.listFiles()?.filter { file ->
         // Show all directories, but only video files
