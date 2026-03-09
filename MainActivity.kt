@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -69,9 +70,10 @@ class MainActivity : ComponentActivity() {
                     FileManagerScreen(
                         onFileSelected = { path ->
                             Log.d("MainActivity", "File selected: $path")
+                            // Pass the file path directly - PlayerScreen expects a file path string
                             videoPath = path
                             showFileManager = false
-                            Log.d("MainActivity", "Switching to player - videoPath: $videoPath")
+                            Log.d("MainActivity", "Switching to player with path: $videoPath")
                             recreate()
                         }
                     )
@@ -118,12 +120,6 @@ class MainActivity : ComponentActivity() {
         val controller = WindowInsetsControllerCompat(window, window.decorView)
         controller.hide(WindowInsetsCompat.Type.systemBars())
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        
-        // Using the new API instead of deprecated one
-        window.decorView.setOnApplyWindowInsetsListener { v, insets ->
-            controller.hide(WindowInsetsCompat.Type.systemBars())
-            insats
-        }
     }
     
     private fun setOrientationForVideo(width: Int, height: Int) {
@@ -201,11 +197,9 @@ fun FileManagerScreen(
                         fontSize = 16.sp,
                         modifier = Modifier
                             .clickable {
-                                val parent = currentPath?.parentFile
-                                currentPath = if (parent != null && parent.absolutePath != "/") {
-                                    parent
-                                } else {
-                                    null
+                                currentPath = currentPath?.parentFile
+                                if (currentPath?.absolutePath == "/storage/emulated/0") {
+                                    currentPath = null
                                 }
                             }
                             .padding(start = 16.dp)
@@ -278,18 +272,14 @@ fun getStorageRoots(): List<FileItem> {
         isDirectory = true
     ))
     
-    // Add root directories
-    val rootFile = File("/storage/")
-    if (rootFile.exists() && rootFile.isDirectory) {
-        rootFile.listFiles()?.forEach { file ->
-            if (file.isDirectory && file.absolutePath != internalStorage.absolutePath) {
-                roots.add(FileItem(
-                    name = "Storage - ${file.name}",
-                    path = file.absolutePath,
-                    isDirectory = true
-                ))
-            }
-        }
+    // SD Card (if available)
+    val sdCardPath = getSdCardPath()
+    if (sdCardPath != null) {
+        roots.add(FileItem(
+            name = "SD Card",
+            path = sdCardPath,
+            isDirectory = true
+        ))
     }
     
     return roots
@@ -313,4 +303,23 @@ fun loadFiles(directory: File): List<FileItem> {
             isDirectory = file.isDirectory
         )
     } ?: emptyList()
+}
+
+fun getSdCardPath(): String? {
+    val storageDirs = listOf(
+        "/storage/",
+        "/mnt/sdcard/",
+        "/mnt/extSdCard/",
+        "/storage/sdcard1/",
+        "/storage/extSdCard/"
+    )
+    
+    for (path in storageDirs) {
+        val file = File(path)
+        if (file.exists() && file.canRead() && file.isDirectory && file != Environment.getExternalStorageDirectory()) {
+            return path
+        }
+    }
+    
+    return null
 }
