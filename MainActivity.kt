@@ -44,18 +44,17 @@ class MainActivity : ComponentActivity() {
         
         setContent {
             MaterialTheme {
-                // ✅ STATE MANAGED IN COMPOSE - survives recomposition!
+                // ✅ STATE MANAGED IN COMPOSE
                 var videoPath by remember { mutableStateOf(initialVideoPath) }
                 var showFileManager by remember { mutableStateOf(initialVideoPath == null) }
                 
-                // ✅ BACK BUTTON HANDLER - using Compose state
+                // ✅ BACK BUTTON HANDLER
                 DisposableEffect(showFileManager) {
                     val callback = object : OnBackPressedCallback(true) {
                         override fun handleOnBackPressed() {
                             if (showFileManager) {
-                                finish() // Exit app if on file manager
+                                finish()
                             } else {
-                                // Go back to file manager
                                 showFileManager = true
                                 videoPath = null
                             }
@@ -68,22 +67,25 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 
+                // ✅ OPTIMIZED: Force complete recreation when switching screens
                 if (showFileManager) {
-                    FileManagerScreen(
-                        onFileSelected = { path ->
-                            // ✅ FIX: Convert file path to proper URI format
-                            videoPath = "file://$path"
-                            showFileManager = false
-                            // ✅ NO recreate() needed - just update state!
-                        }
-                    )
+                    key("file-manager") {
+                        FileManagerScreen(
+                            onFileSelected = { path ->
+                                videoPath = "file://$path"
+                                showFileManager = false
+                            }
+                        )
+                    }
                 } else {
-                    PlayerScreen(
-                        videoPath = videoPath,
-                        onVideoLoaded = { width, height ->
-                            setOrientationForVideo(width, height)
-                        }
-                    )
+                    key(videoPath) {
+                        PlayerScreen(
+                            videoPath = videoPath,
+                            onVideoLoaded = { width, height ->
+                                setOrientationForVideo(width, height)
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -92,7 +94,6 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        // New video opened from outside - recreate to reset state
         recreate()
     }
     
@@ -146,20 +147,26 @@ fun FileManagerScreen(
     var currentPath by remember { mutableStateOf<File?>(null) }
     var files by remember { mutableStateOf<List<FileItem>>(emptyList()) }
     
+    // ✅ OPTIMIZED: Cache file listings
+    val fileCache = remember { mutableMapOf<String, List<FileItem>>() }
+    
     // Load files when path changes
     LaunchedEffect(currentPath) {
-        files = if (currentPath == null) {
-            // Show storage roots
-            getStorageRoots()
-        } else {
-            loadFiles(currentPath!!)
+        val pathKey = currentPath?.absolutePath ?: "root"
+        
+        files = fileCache.getOrPut(pathKey) {
+            if (currentPath == null) {
+                getStorageRoots()
+            } else {
+                loadFiles(currentPath!!)
+            }
         }
     }
     
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF1A1A1A)) // Dark grey background
+            .background(Color(0xFF1A1A1A))
     ) {
         // Header with path
         Box(
@@ -188,9 +195,17 @@ fun FileManagerScreen(
                         fontSize = 16.sp,
                         modifier = Modifier
                             .clickable {
-                                currentPath = currentPath?.parentFile
-                                if (currentPath?.absolutePath == "/storage/emulated/0") {
-                                    currentPath = null
+                                // ✅ FIXED: Better up navigation
+                                val parent = currentPath?.parentFile
+                                
+                                // If no parent OR parent is /storage or /mnt, go to root
+                                currentPath = if (parent == null || 
+                                    parent.absolutePath == "/storage" ||
+                                    parent.absolutePath == "/mnt" ||
+                                    parent.absolutePath == "/") {
+                                    null
+                                } else {
+                                    parent
                                 }
                             }
                             .padding(start = 16.dp)
@@ -204,14 +219,13 @@ fun FileManagerScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(vertical = 8.dp)
         ) {
-            items(files) { file ->
+            items(files, key = { it.path }) { file ->
                 FileListItem(
                     file = file,
                     onClick = {
                         if (file.isDirectory) {
                             currentPath = File(file.path)
                         } else {
-                            // ✅ Pass file path - MainActivity will add "file://" prefix
                             onFileSelected(file.path)
                         }
                     }
@@ -233,7 +247,7 @@ fun FileListItem(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Icon indicator for folder vs file
+        // Icon indicator
         Text(
             text = if (file.isDirectory) "📁" else "🎬",
             fontSize = 20.sp,
@@ -281,11 +295,10 @@ fun loadFiles(directory: File): List<FileItem> {
     val videoExtensions = setOf(".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".3gp")
     
     return directory.listFiles()?.filter { file ->
-        // Show all directories, but only video files
         file.isDirectory || videoExtensions.any { file.name.lowercase().endsWith(it) }
     }?.sortedWith(compareBy(
-        { !it.isDirectory }, // Directories first
-        { it.name.lowercase() } // Then alphabetically
+        { !it.isDirectory },
+        { it.name.lowercase() }
     ))?.map { file ->
         FileItem(
             name = file.name,
@@ -296,18 +309,16 @@ fun loadFiles(directory: File): List<FileItem> {
 }
 
 fun getSdCardPath(): String? {
-    val storageDirs = listOf(
-        "/storage/",
-        "/mnt/sdcard/",
-        "/mnt/extSdCard/",
-        "/storage/sdcard1/",
-        "/storage/extSdCard/"
-    )
+    // Check common SD card paths
+    val externalDirs = File("/storage").listFiles()
     
-    for (path in storageDirs) {
-        val file = File(path)
-        if (file.exists() && file.canRead() && file.isDirectory && file != Environment.getExternalStorageDirectory()) {
-            return path
+    externalDirs?.forEach { dir ->
+        if (dir.isDirectory && 
+            dir.canRead() && 
+            dir.absolutePath != Environment.getExternalStorageDirectory().absolutePath &&
+            !dir.name.equals("emulated", ignoreCase = true) &&
+            !dir.name.equals("self", ignoreCase = true)) {
+            return dir.absolutePath
         }
     }
     
