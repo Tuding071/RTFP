@@ -31,6 +31,7 @@ import `is`.xyz.mpv.MPV
 import kotlinx.coroutines.*
 import java.io.File
 import kotlin.math.abs
+import kotlin.math.sign
 
 class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView(context, attrs) {
     
@@ -788,7 +789,7 @@ fun SimpleDraggableProgressBar(
                 .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = { offset ->
-                            // Save the starting X and current position
+                            // Save starting position and X coordinate
                             dragStartX = offset.x
                             savedPositionAtTouch = getFreshPosition().coerceIn(0f, safeDuration)
                             hasPassedThreshold = false
@@ -796,28 +797,34 @@ fun SimpleDraggableProgressBar(
                         onDrag = { change, _ ->
                             change.consume()
                             val currentX = change.position.x
-                            val totalMovementX = abs(currentX - dragStartX)
+                            val totalMovementX = currentX - dragStartX
                             
                             if (!hasPassedThreshold) {
-                                // Check if we've passed the threshold
-                                if (totalMovementX > movementThresholdPx) {
+                                // Check if we've passed the threshold in either direction
+                                if (abs(totalMovementX) > movementThresholdPx) {
                                     hasPassedThreshold = true
                                 } else {
-                                    // Still within threshold - do nothing
                                     return@detectDragGestures
                                 }
+                            }
+                            
+                            // Calculate movement beyond threshold
+                            val thresholdDirection = totalMovementX.sign
+                            val movementBeyondThreshold = abs(totalMovementX) - movementThresholdPx
+                            val effectiveMovement = if (movementBeyondThreshold > 0) {
+                                thresholdDirection * movementBeyondThreshold
                             } else {
-                                // After threshold, calculate from the ORIGINAL saved position
-                                // using the total movement from dragStartX
-                                val deltaX = currentX - dragStartX
-                                val deltaPosition = (deltaX / size.width) * safeDuration
-                                val newPosition = (savedPositionAtTouch + deltaPosition)
-                                    .coerceIn(0f, safeDuration)
-                                
-                                // Only update if position actually changed
-                                if (abs(newPosition - safePosition) > 0.1f) {
-                                    onValueChange(newPosition)
-                                }
+                                0f
+                            }
+                            
+                            // Calculate new position using only movement beyond threshold
+                            val deltaPosition = (effectiveMovement / size.width) * safeDuration
+                            val newPosition = (savedPositionAtTouch + deltaPosition)
+                                .coerceIn(0f, safeDuration)
+                            
+                            // Update if changed
+                            if (abs(newPosition - safePosition) > 0.1f) {
+                                onValueChange(newPosition)
                             }
                         },
                         onDragEnd = {
