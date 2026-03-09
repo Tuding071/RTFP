@@ -12,6 +12,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -23,11 +24,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -66,7 +65,7 @@ class MainActivity : ComponentActivity() {
                         onFileSelected = { path ->
                             videoPath = path
                             showFileManager = false
-                            recreate() // Switch to player
+                            recreate()
                         },
                         onExit = { finish() }
                     )
@@ -131,11 +130,11 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Tab data class
+// Data classes
 data class FileManagerTab(
     val id: String = UUID.randomUUID().toString(),
     var currentPath: File? = null,
-    var history: MutableList<File> = mutableListOf(),
+    val history: MutableList<File> = mutableListOf(),
     var isStorageView: Boolean = true
 ) {
     fun navigateTo(path: File?) {
@@ -165,23 +164,27 @@ data class FileManagerTab(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+data class FileItem(
+    val name: String,
+    val path: String,
+    val isDirectory: Boolean
+)
+
 @Composable
 fun TabbedFileManagerScreen(
     onFileSelected: (String) -> Unit,
     onExit: () -> Unit
 ) {
-    val context = LocalContext.current
     var tabs by remember { mutableStateOf(listOf(FileManagerTab())) }
     var selectedTabIndex by remember { mutableStateOf(0) }
     var showNewTabDialog by remember { mutableStateOf(false) }
     var longPressedPath by remember { mutableStateOf<File?>(null) }
-    var showTabMenu by remember { mutableStateOf(false) }
-    var tabMenuPosition by remember { mutableStateOf(0) }
     val tabListState = rememberLazyListState()
     
-    // Load files for current tab
+    // Get current tab
     val currentTab = tabs.getOrNull(selectedTabIndex)
+    
+    // Load files for current tab
     var files by remember(currentTab?.currentPath, selectedTabIndex) {
         mutableStateOf(if (currentTab?.isStorageView == true) emptyList() else loadVideoFiles(currentTab?.currentPath))
     }
@@ -242,10 +245,6 @@ fun TabbedFileManagerScreen(
                     .clickable {
                         tabs = tabs + FileManagerTab()
                         selectedTabIndex = tabs.size - 1
-                        // Scroll to new tab
-                        LaunchedEffect(Unit) {
-                            tabListState.animateScrollToItem(tabs.size - 1)
-                        }
                     }
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
@@ -259,7 +258,6 @@ fun TabbedFileManagerScreen(
                 currentPath = currentTab.currentPath,
                 onBack = {
                     currentTab.navigateBack()
-                    // Force recompose
                     tabs = tabs.toList()
                 },
                 onExit = onExit
@@ -273,7 +271,6 @@ fun TabbedFileManagerScreen(
                 StorageOptionsScreen(
                     onStorageSelected = { storagePath ->
                         currentTab.navigateTo(File(storagePath))
-                        // Force recompose
                         tabs = tabs.toList()
                     }
                 )
@@ -289,7 +286,6 @@ fun TabbedFileManagerScreen(
                             onClick = {
                                 if (file.isDirectory) {
                                     currentTab.navigateTo(File(file.path))
-                                    // Force recompose
                                     tabs = tabs.toList()
                                 } else {
                                     onFileSelected(file.path)
@@ -330,7 +326,6 @@ fun TabbedFileManagerScreen(
                             if (path.isDirectory) {
                                 newTab.navigateTo(path)
                             } else {
-                                // If it's a file, open its parent directory
                                 newTab.navigateTo(path.parentFile)
                             }
                             tabs = tabs + newTab
@@ -353,7 +348,9 @@ fun TabbedFileManagerScreen(
                     Text("Cancel", color = Color.Gray)
                 }
             },
-            containerColor = Color(0xFF2A2A2A)
+            containerColor = Color(0xFF2A2A2A),
+            titleContentColor = Color.White,
+            textContentColor = Color.White
         )
     }
 }
@@ -370,13 +367,11 @@ fun TabItem(
         modifier = Modifier
             .background(if (isSelected) Color(0xFF3A3A3A) else Color(0xFF2A2A2A))
             .clickable { onSelect() }
-            .then(
-                Modifier.pointerInput(Unit) {
-                    detectTapGestures(
-                        onLongPress = { onLongPress() }
-                    )
-                }
-            )
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onLongPress = { onLongPress() }
+                )
+            }
             .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp)
     ) {
         Row(
@@ -480,7 +475,6 @@ fun StorageOptionsScreen(
             text = "Select Storage",
             color = Color.White,
             fontSize = 18.sp,
-            fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(bottom = 8.dp)
         )
         
@@ -535,13 +529,11 @@ fun FileListItem(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .then(
-                Modifier.pointerInput(Unit) {
-                    detectTapGestures(
-                        onLongPress = { onLongPress() }
-                    )
-                }
-            )
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onLongPress = { onLongPress() }
+                )
+            }
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -561,13 +553,6 @@ fun FileListItem(
         )
     }
 }
-
-// Data class for file items
-data class FileItem(
-    val name: String,
-    val path: String,
-    val isDirectory: Boolean
-)
 
 // Helper functions
 fun loadVideoFiles(directory: File?): List<FileItem> {
