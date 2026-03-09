@@ -5,6 +5,7 @@ import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
+import android.util.Log
 import android.view.View
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -40,6 +41,8 @@ class MainActivity : ComponentActivity() {
         videoPath = extractVideoPath(intent)
         showFileManager = videoPath == null
         
+        Log.d("MainActivity", "onCreate - videoPath: $videoPath, showFileManager: $showFileManager")
+        
         // Setup fullscreen immersive mode
         setupFullscreen()
         
@@ -65,13 +68,15 @@ class MainActivity : ComponentActivity() {
                 if (showFileManager) {
                     FileManagerScreen(
                         onFileSelected = { path ->
-                            // Just pass the file path directly - your PlayerScreen can handle it
+                            Log.d("MainActivity", "File selected: $path")
                             videoPath = path
                             showFileManager = false
+                            Log.d("MainActivity", "Switching to player - videoPath: $videoPath")
                             recreate()
                         }
                     )
                 } else {
+                    Log.d("MainActivity", "Showing PlayerScreen with path: $videoPath")
                     PlayerScreen(
                         videoPath = videoPath,
                         onVideoLoaded = { width, height ->
@@ -88,13 +93,21 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         videoPath = extractVideoPath(intent)
         showFileManager = videoPath == null
+        Log.d("MainActivity", "onNewIntent - videoPath: $videoPath, showFileManager: $showFileManager")
         recreate()
     }
     
     private fun extractVideoPath(intent: Intent?): String? {
         return when (intent?.action) {
             Intent.ACTION_VIEW -> intent.data?.toString()
-            Intent.ACTION_SEND -> intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.toString()
+            Intent.ACTION_SEND -> {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)?.toString()
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)?.toString()
+                }
+            }
             else -> null
         }
     }
@@ -106,10 +119,10 @@ class MainActivity : ComponentActivity() {
         controller.hide(WindowInsetsCompat.Type.systemBars())
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         
-        window.decorView.setOnSystemUiVisibilityChangeListener { visibility ->
-            if (visibility and View.SYSTEM_UI_FLAG_FULLSCREEN == 0) {
-                controller.hide(WindowInsetsCompat.Type.systemBars())
-            }
+        // Using the new API instead of deprecated one
+        window.decorView.setOnApplyWindowInsetsListener { v, insets ->
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+            insats
         }
     }
     
@@ -188,9 +201,11 @@ fun FileManagerScreen(
                         fontSize = 16.sp,
                         modifier = Modifier
                             .clickable {
-                                currentPath = currentPath?.parentFile
-                                if (currentPath?.absolutePath == "/storage/emulated/0") {
-                                    currentPath = null
+                                val parent = currentPath?.parentFile
+                                currentPath = if (parent != null && parent.absolutePath != "/") {
+                                    parent
+                                } else {
+                                    null
                                 }
                             }
                             .padding(start = 16.dp)
@@ -263,14 +278,18 @@ fun getStorageRoots(): List<FileItem> {
         isDirectory = true
     ))
     
-    // SD Card (if available)
-    val sdCardPath = getSdCardPath()
-    if (sdCardPath != null) {
-        roots.add(FileItem(
-            name = "SD Card",
-            path = sdCardPath,
-            isDirectory = true
-        ))
+    // Add root directories
+    val rootFile = File("/storage/")
+    if (rootFile.exists() && rootFile.isDirectory) {
+        rootFile.listFiles()?.forEach { file ->
+            if (file.isDirectory && file.absolutePath != internalStorage.absolutePath) {
+                roots.add(FileItem(
+                    name = "Storage - ${file.name}",
+                    path = file.absolutePath,
+                    isDirectory = true
+                ))
+            }
+        }
     }
     
     return roots
@@ -279,7 +298,7 @@ fun getStorageRoots(): List<FileItem> {
 fun loadFiles(directory: File): List<FileItem> {
     if (!directory.exists() || !directory.isDirectory) return emptyList()
     
-    val videoExtensions = setOf(".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".3gp")
+    val videoExtensions = setOf(".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".3gp", ".mpg", ".mpeg")
     
     return directory.listFiles()?.filter { file ->
         // Show all directories, but only video files
@@ -294,23 +313,4 @@ fun loadFiles(directory: File): List<FileItem> {
             isDirectory = file.isDirectory
         )
     } ?: emptyList()
-}
-
-fun getSdCardPath(): String? {
-    val storageDirs = listOf(
-        "/storage/",
-        "/mnt/sdcard/",
-        "/mnt/extSdCard/",
-        "/storage/sdcard1/",
-        "/storage/extSdCard/"
-    )
-    
-    for (path in storageDirs) {
-        val file = File(path)
-        if (file.exists() && file.canRead() && file.isDirectory && file != Environment.getExternalStorageDirectory()) {
-            return path
-        }
-    }
-    
-    return null
 }
