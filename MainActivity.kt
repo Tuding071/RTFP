@@ -195,17 +195,25 @@ fun FileManagerScreen(
                         fontSize = 16.sp,
                         modifier = Modifier
                             .clickable {
-                                // ✅ FIXED: Better up navigation
-                                val parent = currentPath?.parentFile
-                                
-                                // If no parent OR parent is /storage or /mnt, go to root
-                                currentPath = if (parent == null || 
-                                    parent.absolutePath == "/storage" ||
-                                    parent.absolutePath == "/mnt" ||
-                                    parent.absolutePath == "/") {
-                                    null
-                                } else {
-                                    parent
+                                // ✅ BETTER UP NAVIGATION
+                                val current = currentPath
+                                if (current != null) {
+                                    val parent = current.parentFile
+                                    
+                                    // Check if we should go to root
+                                    val shouldGoToRoot = parent == null ||
+                                        !parent.exists() ||
+                                        !parent.canRead() ||
+                                        parent.absolutePath == "/storage" ||
+                                        parent.absolutePath == "/mnt" ||
+                                        parent.absolutePath == "/" ||
+                                        parent.absolutePath == "/storage/emulated"
+                                    
+                                    currentPath = if (shouldGoToRoot) {
+                                        null
+                                    } else {
+                                        parent
+                                    }
                                 }
                             }
                             .padding(start = 16.dp)
