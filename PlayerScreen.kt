@@ -299,7 +299,6 @@ fun PlayerOverlay(
     fun performQuickSeek(seconds: Int) {
         val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
         val duration = mpv.getPropertyDouble("duration") ?: 0.0
-        val newPosition = (currentPos + seconds).coerceIn(0.0, duration)
         
         quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
         showQuickSeekFeedback = true
@@ -491,7 +490,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Update time
+    // Update time - FIXED: Wait for valid duration
     LaunchedEffect(Unit) {
         // Wait for duration to be valid
         var duration = mpv.getPropertyDouble("duration") ?: 0.0
@@ -499,6 +498,8 @@ fun PlayerOverlay(
             delay(100)
             duration = mpv.getPropertyDouble("duration") ?: 0.0
         }
+        
+        Log.d("PlayerDebug", "Starting time updates with duration: $duration")
         
         // Now start updating
         while (isActive) {
@@ -730,8 +731,6 @@ fun SimpleDraggableProgressBar(
 ) {
     var dragStartX by remember { mutableStateOf(0f) }
     var dragStartPosition by remember { mutableStateOf(0f) }
-    var thresholdCrossedX by remember { mutableStateOf(0f) }
-    var thresholdCrossedPosition by remember { mutableStateOf(0f) }
     var hasPassedThreshold by remember { mutableStateOf(false) }
     
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
@@ -778,23 +777,21 @@ fun SimpleDraggableProgressBar(
                             
                             if (!hasPassedThreshold) {
                                 if (totalMovementX > movementThresholdPx) {
-                                    // Threshold crossed! Save position and X at this moment
                                     hasPassedThreshold = true
-                                    thresholdCrossedX = currentX
-                                    thresholdCrossedPosition = getFreshPosition().coerceIn(0f, safeDuration)
                                 } else {
                                     return@detectDragGestures
                                 }
-                            } else {
-                                // After threshold, calculate from the threshold crossing point
-                                val deltaX = currentX - thresholdCrossedX
-                                val deltaPosition = (deltaX / size.width) * safeDuration
-                                val newPosition = (thresholdCrossedPosition + deltaPosition)
-                                    .coerceIn(0f, safeDuration)
-                                
-                                if (abs(newPosition - safePosition) > 0.1f) {
-                                    onValueChange(newPosition)
-                                }
+                            }
+                            
+                            // Always calculate from ORIGINAL drag start
+                            val deltaX = currentX - dragStartX
+                            val deltaPosition = (deltaX / size.width) * safeDuration
+                            val newPosition = (dragStartPosition + deltaPosition)
+                                .coerceIn(0f, safeDuration)
+                            
+                            // Only update if significantly different
+                            if (abs(newPosition - safePosition) > 0.1f) {
+                                onValueChange(newPosition)
                             }
                         },
                         onDragEnd = {
