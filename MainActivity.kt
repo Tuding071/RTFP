@@ -52,6 +52,7 @@ class MainActivity : ComponentActivity() {
                 if (showFileManager) {
                     finish()
                 } else {
+                    // Go back to file manager
                     showFileManager = true
                     videoPath = null
                     recreate()
@@ -64,6 +65,7 @@ class MainActivity : ComponentActivity() {
                 if (showFileManager) {
                     FileManagerScreen(
                         onFileSelected = { path ->
+                            // Just pass the file path directly - your PlayerScreen can handle it
                             videoPath = path
                             showFileManager = false
                             recreate()
@@ -209,6 +211,7 @@ fun FileManagerScreen(
                         if (file.isDirectory) {
                             currentPath = File(file.path)
                         } else {
+                            // Pass the file path directly
                             onFileSelected(file.path)
                         }
                     }
