@@ -86,7 +86,6 @@ fun PlayerScreen(
     var mpvInstance by remember { mutableStateOf<MPV?>(null) }
     var isVideoLoaded by remember { mutableStateOf(false) }
     var savedPosition by remember { mutableStateOf<Double?>(null) }
-    var videoDuration by remember { mutableStateOf(0.0) }
     val coroutineScope = rememberCoroutineScope()
     
     // Lifecycle observer for auto-pause with position saving
@@ -151,7 +150,6 @@ fun PlayerScreen(
                             Log.d("PlayerDebug", "Video loaded - Width: $width, Height: $height, Duration: $duration")
                             
                             if (width > 0 && height > 0 && duration > 0) {
-                                videoDuration = duration
                                 onVideoLoaded(width, height)
                                 isVideoLoaded = true
                             }
@@ -172,10 +170,10 @@ fun PlayerScreen(
     }
 }
 
-@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun PlayerOverlay(
-    mpv: MPV,  // Pass MPV instance instead of using static MPVLib
+    mpv: MPV,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -493,7 +491,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Update time - FIXED VERSION
+    // Update time
     LaunchedEffect(Unit) {
         // Wait for duration to be valid
         var duration = mpv.getPropertyDouble("duration") ?: 0.0
@@ -516,7 +514,7 @@ fun PlayerOverlay(
             totalTime = formatTimeSimple(currentDuration)
             seekbarDuration = currentDuration.toFloat()
             
-            delay(100) // 100ms updates
+            delay(100)
         }
     }
     
@@ -732,6 +730,8 @@ fun SimpleDraggableProgressBar(
 ) {
     var dragStartX by remember { mutableStateOf(0f) }
     var dragStartPosition by remember { mutableStateOf(0f) }
+    var thresholdCrossedX by remember { mutableStateOf(0f) }
+    var thresholdCrossedPosition by remember { mutableStateOf(0f) }
     var hasPassedThreshold by remember { mutableStateOf(false) }
     
     val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
@@ -778,21 +778,23 @@ fun SimpleDraggableProgressBar(
                             
                             if (!hasPassedThreshold) {
                                 if (totalMovementX > movementThresholdPx) {
+                                    // Threshold crossed! Save position and X at this moment
                                     hasPassedThreshold = true
+                                    thresholdCrossedX = currentX
+                                    thresholdCrossedPosition = getFreshPosition().coerceIn(0f, safeDuration)
                                 } else {
                                     return@detectDragGestures
                                 }
-                            }
-                            
-                            // Always calculate from ORIGINAL drag start
-                            val deltaX = currentX - dragStartX
-                            val deltaPosition = (deltaX / size.width) * safeDuration
-                            val newPosition = (dragStartPosition + deltaPosition)
-                                .coerceIn(0f, safeDuration)
-                            
-                            // Only update if significantly different
-                            if (abs(newPosition - safePosition) > 0.1f) {
-                                onValueChange(newPosition)
+                            } else {
+                                // After threshold, calculate from the threshold crossing point
+                                val deltaX = currentX - thresholdCrossedX
+                                val deltaPosition = (deltaX / size.width) * safeDuration
+                                val newPosition = (thresholdCrossedPosition + deltaPosition)
+                                    .coerceIn(0f, safeDuration)
+                                
+                                if (abs(newPosition - safePosition) > 0.1f) {
+                                    onValueChange(newPosition)
+                                }
                             }
                         },
                         onDragEnd = {
