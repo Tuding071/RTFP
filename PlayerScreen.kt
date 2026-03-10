@@ -44,10 +44,10 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
 
     override fun postInitOptions() {
         // Performance
-        mpv.setOptionString("vd-lavc-threads", "8")
-        mpv.setOptionString("demuxer-lavf-threads", "4")
+        mpv.setOptionString("vd-lavc-threads", "1")
+        mpv.setOptionString("demuxer-lavf-threads", "8")
         mpv.setOptionString("cache-initial", "0.5")
-        mpv.setOptionString("video-sync", "display-resample")
+        mpv.setOptionString("untimed", "yes")
         
         // Seeking
         mpv.setOptionString("hr-seek", "yes")
@@ -197,7 +197,7 @@ fun PlayerOverlay(
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     var seekDirection by remember { mutableStateOf("") }
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 50L
+    val seekThrottleMs = 0L
     
     var touchStartTime by remember { mutableStateOf(0L) }
     var touchStartX by remember { mutableStateOf(0f) }
