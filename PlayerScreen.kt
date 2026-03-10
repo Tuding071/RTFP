@@ -58,7 +58,6 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         mpv.setOptionString("vd-lavc-skiploopfilter", "all")
         mpv.setOptionString("vd-lavc-skipidct", "all")
         mpv.setOptionString("vd-lavc-assemble", "yes")
-        mpv.setOptionString("vd-lavc-dr", "yes")  // Added
         
         // GPU
         mpv.setOptionString("gpu-dumb-mode", "yes")
