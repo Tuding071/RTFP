@@ -54,6 +54,9 @@ class MainActivity : ComponentActivity() {
                 var videoPath by remember { mutableStateOf(initialVideoPath) }
                 var showFileManager by remember { mutableStateOf(initialVideoPath == null) }
                 
+                // Reset to root when returning to file manager
+                val resetToRoot = remember { mutableStateOf(true) }
+                
                 // Handle system bars based on screen
                 LaunchedEffect(showFileManager) {
                     if (showFileManager) {
@@ -79,6 +82,7 @@ class MainActivity : ComponentActivity() {
                             } else {
                                 showFileManager = true
                                 videoPath = null
+                                resetToRoot.value = true // Reset to root when going back
                             }
                         }
                     }
@@ -89,6 +93,8 @@ class MainActivity : ComponentActivity() {
                 if (showFileManager) {
                     key("file-manager") {
                         FileManagerScreen(
+                            resetToRoot = resetToRoot.value,
+                            onResetComplete = { resetToRoot.value = false },
                             onFileSelected = { path ->
                                 videoPath = "file://$path"
                                 showFileManager = false
@@ -158,6 +164,8 @@ enum class SortOption {
 
 @Composable
 fun FileManagerScreen(
+    resetToRoot: Boolean,
+    onResetComplete: () -> Unit,
     onFileSelected: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -170,6 +178,14 @@ fun FileManagerScreen(
     // Preview state
     var previewVideo by remember { mutableStateOf<String?>(null) }
     var showPreview by remember { mutableStateOf(false) }
+    
+    // Reset to root when requested
+    LaunchedEffect(resetToRoot) {
+        if (resetToRoot) {
+            currentPath = null
+            onResetComplete()
+        }
+    }
     
     // Load files when path changes
     LaunchedEffect(currentPath) {
@@ -232,11 +248,14 @@ fun FileManagerScreen(
                                 showPreview = true
                             }
                         },
-                        onClick = {
+                        onTitleClick = {
+                            if (!file.isDirectory) {
+                                onFileSelected(file.path)
+                            }
+                        },
+                        onFolderClick = {
                             if (file.isDirectory) {
                                 currentPath = File(file.path)
-                            } else {
-                                onFileSelected(file.path)
                             }
                         }
                     )
@@ -327,38 +346,44 @@ fun HeaderSection(
 fun FileListItem(
     file: FileItem,
     onPreviewClick: () -> Unit,
-    onClick: () -> Unit
+    onTitleClick: () -> Unit,
+    onFolderClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() }
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Colored label instead of thumbnail
-        Box(
-            modifier = Modifier
-                .size(16.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(
-                    if (file.isDirectory) Color(0xFF4CAF50)  // Green for folders
-                    else Color(0xFFF44336)  // Red for videos
-                )
-        )
-        
-        Spacer(modifier = Modifier.width(12.dp))
-        
-        // File info
+        // File info - clickable area for folders or video title
         Column(
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .weight(1f)
+                .then(
+                    if (file.isDirectory) {
+                        Modifier.clickable { onFolderClick() }
+                    } else {
+                        Modifier
+                    }
+                )
         ) {
-            Text(
-                text = file.name,
-                color = Color.White,
-                fontSize = 14.sp,
-                maxLines = 1
-            )
+            // Video title with color (clickable only for videos)
+            if (!file.isDirectory) {
+                Text(
+                    text = file.name,
+                    color = Color(0xFFF44336), // Red for videos
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    modifier = Modifier.clickable { onTitleClick() }
+                )
+            } else {
+                Text(
+                    text = file.name,
+                    color = Color(0xFF4CAF50), // Green for folders
+                    fontSize = 14.sp,
+                    maxLines = 1
+                )
+            }
             
             Text(
                 text = if (file.isDirectory) "Folder" else formatFileSize(file.size),
@@ -420,7 +445,7 @@ fun VideoPreviewPopup(
             .fillMaxSize()
             .background(Color(0xCC000000))
     ) {
-        // Preview container - only click on background doesn't close
+        // Preview container
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.9f)
