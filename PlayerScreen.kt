@@ -35,8 +35,11 @@ import kotlin.math.sign
 
 class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView(context, attrs) {
     
+    // Track playback state for fast scrubbing
+    private var wasPlayingBeforeDrag = false
+    
     override fun initOptions() {
-        // ✅ SOFTWARE DECODING - Works better on your device!
+        // Permanent mpv configuration
         mpv.setOptionString("hwdec", "no")
         mpv.setOptionString("vo", "gpu")
         mpv.setOptionString("profile", "fast")
@@ -44,42 +47,74 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
     }
 
     override fun postInitOptions() {
-        // ✅ NO FRAMEDROP - See all frames during seeking!
-        mpv.setOptionString("framedrop", "no")
-        
-        // ✅ OPTIMIZED THREADING
-        mpv.setOptionString("vd-lavc-threads", "4")
+        // Performance
+        mpv.setOptionString("vd-lavc-threads", "8")
         mpv.setOptionString("demuxer-lavf-threads", "4")
+        mpv.setOptionString("cache-initial", "0.5")
         
-        // ✅ BETTER CACHE - Smoother seeking without hardware decode
-        mpv.setOptionString("cache", "yes")
-        mpv.setOptionString("demuxer-max-bytes", "100M")
-        mpv.setOptionString("demuxer-max-back-bytes", "50M")
-        mpv.setOptionString("demuxer-readahead-secs", "10")
+        // Video sync
+        mpv.setOptionString("video-sync", "display-resample")
         
-        // ✅ SEEKING - Show all frames during horizontal drag!
+        // Seeking
         mpv.setOptionString("hr-seek", "yes")
         mpv.setOptionString("hr-seek-framedrop", "no")
         
-        // ✅ FAST SOFTWARE DECODING
+        // Fast decoding - permanent settings
         mpv.setOptionString("vd-lavc-fast", "yes")
-        mpv.setOptionString("vd-lavc-skiploopfilter", "nonkey")
-        mpv.setOptionString("vd-lavc-skipidct", "nonkey")
+        mpv.setOptionString("vd-lavc-skiploopfilter", "nonref") // permanent
+        mpv.setOptionString("vd-lavc-skipidct", "all")
         
-        // ✅ GPU ASSIST (even with software decode)
+        // GPU optimizations
+        mpv.setOptionString("vd-lavc-dr", "yes")
         mpv.setOptionString("opengl-pbo", "yes")
-        mpv.setOptionString("gpu-dumb-mode", "no")
+        mpv.setOptionString("opengl-early-flush", "yes")
         
-        // ✅ AUDIO
+        // Audio
         mpv.setOptionString("audio-channels", "auto")
         mpv.setOptionString("audio-samplerate", "auto")
+        mpv.setOptionString("audio-pitch-correction", "yes")
         
-        // ✅ VIDEO
+        // Video
         mpv.setOptionString("deband", "no")
         mpv.setOptionString("video-aspect-override", "no")
     }
 
     override fun observeProperties() {}
+    
+    // Fast scrubbing methods
+    fun onHorizontalDragOrSeekStart() {
+        // If not paused, pause first
+        if (!mpv.isPaused()) {
+            mpv.pause()
+            wasPlayingBeforeDrag = true
+        } else {
+            wasPlayingBeforeDrag = false
+        }
+        
+        // Temporarily speed up decoding and display
+        mpv.setOptionString("untimed", "yes")
+        mpv.setOptionString("vd-lavc-skiploopfilter", "all")
+    }
+    
+    fun onHorizontalDragOrSeekMove(position: Long) {
+        // Seek to the current position during drag
+        mpv.seek(position)
+        // Frame displays immediately because untimed=yes
+    }
+    
+    fun onHorizontalDragOrSeekEnd(finalPosition: Long) {
+        // Restore normal decoding and timing
+        mpv.setOptionString("untimed", "no")
+        mpv.setOptionString("vd-lavc-skiploopfilter", "nonref") // restore permanent quality
+        
+        // Final seek to ensure audio/video sync is rebuilt
+        mpv.seek(finalPosition)
+        
+        // Resume playback if it was playing before
+        if (wasPlayingBeforeDrag) {
+            mpv.resume()
+        }
+    }
 }
 
 @Composable
@@ -143,8 +178,8 @@ fun PlayerScreen(
                             var attempts = 0
                             var duration = 0.0
                             
-                            // ✅ OPTIMIZED: Reduced wait time to 2 seconds
-                            while (duration <= 0 && attempts < 20) { // 2 seconds max
+                            // Keep checking until we get valid duration
+                            while (duration <= 0 && attempts < 50) { // 5 seconds max
                                 delay(100)
                                 duration = mpv.getPropertyDouble("duration") ?: 0.0
                                 attempts++
@@ -171,6 +206,7 @@ fun PlayerScreen(
         if (isVideoLoaded && mpvInstance != null) {
             PlayerOverlay(
                 mpv = mpvInstance!!,
+                mpvView = mpvView!!,
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -181,6 +217,7 @@ fun PlayerScreen(
 @Composable
 fun PlayerOverlay(
     mpv: MPV,
+    mpvView: SimpleMPVView,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -386,6 +423,9 @@ fun PlayerOverlay(
         showSeekbar = true
         showVideoInfo = true
         
+        // Apply fast scrubbing optimizations
+        mpvView.onHorizontalDragOrSeekStart()
+        
         if (wasPlayingBeforeSeek) {
             mpv.setPropertyBoolean("pause", true)
         }
@@ -418,13 +458,17 @@ fun PlayerOverlay(
         seekDirection = if (deltaX > 0) "+" else "-"
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
-        performRealTimeSeek(clampedPosition)
+        
+        // Use fast scrubbing seek
+        mpvView.onHorizontalDragOrSeekMove(clampedPosition.toLong())
     }
     
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = mpv.getPropertyDouble("time-pos") ?: seekStartPosition
-            performRealTimeSeek(currentPos)
+            
+            // End fast scrubbing with final position
+            mpvView.onHorizontalDragOrSeekEnd(currentPos.toLong())
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -538,6 +582,9 @@ fun PlayerOverlay(
             showSeekbar = true
             showVideoInfo = true
             
+            // Apply fast scrubbing optimizations
+            mpvView.onHorizontalDragOrSeekStart()
+            
             if (wasPlayingBeforeSeek) {
                 mpv.setPropertyBoolean("pause", true)
             }
@@ -549,11 +596,18 @@ fun PlayerOverlay(
         val targetPosition = newPosition.toDouble()
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
-        performRealTimeSeek(targetPosition)
+        
+        // Use fast scrubbing seek
+        mpvView.onHorizontalDragOrSeekMove(targetPosition.toLong())
     }
     
     fun handleDragFinished() {
         isDragging = false
+        val finalPosition = seekbarPosition.toDouble()
+        
+        // End fast scrubbing with final position
+        mpvView.onHorizontalDragOrSeekEnd(finalPosition.toLong())
+        
         if (wasPlayingBeforeSeek) {
             coroutineScope.launch {
                 delay(100)
