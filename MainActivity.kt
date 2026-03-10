@@ -4,14 +4,17 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
-import android.media.ThumbnailUtils
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.provider.MediaStore
 import android.view.View
 import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.MediaController
+import android.widget.VideoView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
@@ -34,12 +37,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -262,7 +261,7 @@ fun FileManagerScreen(
                 )
             }
             
-            // Video preview popup
+            // Video preview popup with native VideoView
             if (showPreview && previewVideo != null) {
                 VideoPreviewPopup(
                     videoPath = previewVideo!!,
@@ -411,6 +410,32 @@ fun VideoPreviewPopup(
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
+    var isPlaying by remember { mutableStateOf(true) }
+    var currentPosition by remember { mutableStateOf(0) }
+    
+    // Create VideoView and MediaController
+    val videoView = remember {
+        VideoView(context).apply {
+            setVideoURI(Uri.parse(videoPath))
+            
+            val mediaController = MediaController(context).apply {
+                setAnchorView(this@apply)
+                setMediaPlayer(this@apply)
+            }
+            setMediaController(mediaController)
+            
+            setOnPreparedListener { mp ->
+                mp.isLooping = true
+                start()
+            }
+        }
+    }
+    
+    DisposableEffect(Unit) {
+        onDispose {
+            videoView.stopPlayback()
+        }
+    }
     
     Box(
         modifier = Modifier
@@ -418,10 +443,10 @@ fun VideoPreviewPopup(
             .background(Color(0xCC000000))
             .clickable { onClose() }
     ) {
-        Card(
+        Box(
             modifier = Modifier
                 .fillMaxWidth(0.9f)
-                .fillMaxHeight(0.7f)
+                .fillMaxHeight(0.6f)
                 .align(Alignment.Center)
                 .clip(RoundedCornerShape(8.dp))
                 .background(Color.Black)
@@ -452,38 +477,19 @@ fun VideoPreviewPopup(
                         color = Color.White,
                         fontSize = 12.sp,
                         maxLines = 1,
-                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 8.dp)
                     )
                 }
                 
-                // Video player surface (simplified - would need ExoPlayer)
-                Box(
+                // Native VideoView
+                AndroidView(
+                    factory = { videoView },
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .background(Color.Black)
-                ) {
-                    Text(
-                        text = "Video Preview",
-                        color = Color.White,
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
-                
-                // Seekbar placeholder
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFF1A1A1A))
-                        .padding(8.dp),
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Text(
-                        text = "0:00 / 0:00",
-                        color = Color.Gray,
-                        fontSize = 12.sp
-                    )
-                }
+                )
             }
         }
     }
@@ -658,8 +664,8 @@ class ThumbnailManager(private val context: Context) {
     private val _thumbnails = mutableStateOf<Map<String, Bitmap>>(emptyMap())
     val thumbnails: State<Map<String, Bitmap>> = _thumbnails
     
-    // Limit to 200 videos
-    private val maxVideos = 200
+    // We can set this to 1000 now since only visible ones are in RAM
+    private val maxVideos = 1000
     private val videoQueue = mutableListOf<String>()
     
     init {
@@ -681,7 +687,7 @@ class ThumbnailManager(private val context: Context) {
     
     private fun generateThumbnail(videoPath: String) {
         // Run in background
-        CoroutineScope(Dispatchers.IO).launch {
+        Thread {
             try {
                 // Check cache first
                 val videoFile = File(videoPath)
@@ -715,14 +721,15 @@ class ThumbnailManager(private val context: Context) {
                 }
                 
                 if (bitmap != null) {
-                    withContext(Dispatchers.Main) {
+                    // Update on main thread
+                    (context as? MainActivity)?.runOnUiThread {
                         _thumbnails.value = _thumbnails.value + (videoPath to bitmap)
                     }
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-        }
+        }.start()
     }
     
     private fun manageCache(videoPath: String) {
@@ -741,11 +748,7 @@ class ThumbnailManager(private val context: Context) {
     }
     
     private fun loadExistingThumbnails() {
-        thumbnailDir.listFiles()?.forEach { file ->
-            if (file.extension == "jpg") {
-                // Would need to map back to video paths
-                // This is simplified
-            }
-        }
+        // This would need to map cached files to video paths
+        // Simplified for now
     }
 }
