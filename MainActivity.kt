@@ -3,9 +3,6 @@ package com.rtfp.player
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
@@ -30,18 +27,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import java.io.File
-import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
-import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
     
@@ -50,9 +45,6 @@ class MainActivity : ComponentActivity() {
         
         // Get initial video path from intent
         val initialVideoPath = extractVideoPath(intent)
-        
-        // Setup display - show bars in file manager, hide in player
-        setupDisplay()
         
         // Keep screen on while activity is visible
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -79,6 +71,8 @@ class MainActivity : ComponentActivity() {
                 }
                 
                 if (showFileManager) {
+                    // Show status/nav bars in file manager
+                    ShowSystemBars()
                     key("file-manager") {
                         FileManagerScreen(
                             onFileSelected = { path ->
@@ -88,6 +82,8 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 } else {
+                    // Hide status/nav bars in player
+                    HideSystemBars()
                     key(videoPath) {
                         PlayerScreen(
                             videoPath = videoPath,
@@ -115,11 +111,6 @@ class MainActivity : ComponentActivity() {
         }
     }
     
-    private fun setupDisplay() {
-        // Show system bars by default
-        WindowCompat.setDecorFitsSystemWindows(window, true)
-    }
-    
     private fun setOrientationForVideo(width: Int, height: Int) {
         requestedOrientation = if (width > height) {
             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -132,6 +123,22 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
+}
+
+@Composable
+fun ShowSystemBars() {
+    // Show system bars for file manager
+    WindowCompat.setDecorFitsSystemWindows(LocalContext.current as MainActivity, true)
+}
+
+@Composable
+fun HideSystemBars() {
+    // Hide system bars for player
+    val window = (LocalContext.current as MainActivity).window
+    WindowCompat.setDecorFitsSystemWindows(window, false)
+    val controller = WindowInsetsControllerCompat(window, window.decorView)
+    controller.hide(WindowInsetsCompat.Type.systemBars())
+    controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
 }
 
 // Data class for file items
@@ -168,10 +175,6 @@ fun FileManagerScreen(
     var previewVideo by remember { mutableStateOf<String?>(null) }
     var showPreview by remember { mutableStateOf(false) }
     
-    // Thumbnail manager - using simple mutableStateMap
-    val thumbnails = remember { mutableStateMapOf<String, Bitmap>() }
-    val thumbnailManager = remember { ThumbnailManager(context, thumbnails) }
-    
     // Load files when path changes
     LaunchedEffect(currentPath) {
         files = if (currentPath == null) {
@@ -181,8 +184,6 @@ fun FileManagerScreen(
         }
         // Sort with folders on top
         files = sortFilesWithFoldersTop(files, sortOption)
-        // Generate thumbnails
-        thumbnailManager.generateForFiles(files)
     }
     
     // Re-sort when sort option changes
@@ -229,7 +230,6 @@ fun FileManagerScreen(
                 items(files, key = { it.path }) { file ->
                     FileListItem(
                         file = file,
-                        thumbnail = thumbnails[file.path],
                         onPreviewClick = {
                             if (!file.isDirectory) {
                                 previewVideo = file.path
@@ -330,7 +330,6 @@ fun HeaderSection(
 @Composable
 fun FileListItem(
     file: FileItem,
-    thumbnail: Bitmap?,
     onPreviewClick: () -> Unit,
     onClick: () -> Unit
 ) {
@@ -341,29 +340,16 @@ fun FileListItem(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Thumbnail
+        // Colored label instead of thumbnail
         Box(
             modifier = Modifier
-                .size(60.dp)
+                .size(16.dp)
                 .clip(RoundedCornerShape(4.dp))
-                .background(Color(0xFF333333))
-        ) {
-            if (thumbnail != null) {
-                androidx.compose.foundation.Image(
-                    bitmap = thumbnail.asImageBitmap(),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
+                .background(
+                    if (file.isDirectory) Color(0xFF4CAF50)  // Green for folders
+                    else Color(0xFFF44336)  // Red for videos
                 )
-            } else if (!file.isDirectory) {
-                // Placeholder for video without thumbnail
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color(0xFF444444))
-                )
-            }
-        }
+        )
         
         Spacer(modifier = Modifier.width(12.dp))
         
@@ -437,8 +423,8 @@ fun VideoPreviewPopup(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xCC000000))
-            .clickable { onClose() }
     ) {
+        // Preview container - only this area is clickable for closing
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.9f)
@@ -652,92 +638,4 @@ fun getSdCardPath(): String? {
     }
     
     return null
-}
-
-// Thumbnail Manager Class - simplified with mutableStateMap
-class ThumbnailManager(
-    private val context: Context,
-    private val thumbnails: MutableMap<String, Bitmap>
-) {
-    private val thumbnailDir = File(context.cacheDir, "thumbnails")
-    private val maxVideos = 1000
-    private val videoQueue = mutableListOf<String>()
-    
-    init {
-        if (!thumbnailDir.exists()) {
-            thumbnailDir.mkdirs()
-        }
-    }
-    
-    fun generateForFiles(files: List<FileItem>) {
-        val videoFiles = files.filter { !it.isDirectory }
-        
-        videoFiles.forEach { file ->
-            if (!thumbnails.containsKey(file.path)) {
-                generateThumbnail(file.path)
-            }
-        }
-    }
-    
-    private fun generateThumbnail(videoPath: String) {
-        // Run in background
-        Thread {
-            try {
-                // Check cache first
-                val videoFile = File(videoPath)
-                val cacheFile = File(thumbnailDir, "${videoFile.nameWithoutExtension}.jpg")
-                
-                val bitmap = if (cacheFile.exists()) {
-                    BitmapFactory.decodeFile(cacheFile.absolutePath)
-                } else {
-                    // Generate new thumbnail
-                    val retriever = MediaMetadataRetriever()
-                    retriever.setDataSource(videoPath)
-                    val frame = retriever.getFrameAtTime(1000000) // 1 second
-                    retriever.release()
-                    
-                    if (frame != null) {
-                        // Scale to thumbnail size
-                        val scaled = Bitmap.createScaledBitmap(frame, 120, 120, true)
-                        
-                        // Save to cache
-                        FileOutputStream(cacheFile).use { out ->
-                            scaled.compress(Bitmap.CompressFormat.JPEG, 80, out)
-                        }
-                        
-                        // Manage cache size
-                        manageCache(videoPath)
-                        
-                        scaled
-                    } else {
-                        null
-                    }
-                }
-                
-                if (bitmap != null) {
-                    // Update on main thread
-                    (context as? MainActivity)?.runOnUiThread {
-                        thumbnails[videoPath] = bitmap
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }.start()
-    }
-    
-    private fun manageCache(videoPath: String) {
-        videoQueue.add(videoPath)
-        
-        // Remove oldest if over limit
-        while (videoQueue.size > maxVideos) {
-            val oldest = videoQueue.removeAt(0)
-            thumbnails.remove(oldest)
-            
-            // Delete cached file
-            val videoFile = File(oldest)
-            val cacheFile = File(thumbnailDir, "${videoFile.nameWithoutExtension}.jpg")
-            cacheFile.delete()
-        }
-    }
 }
