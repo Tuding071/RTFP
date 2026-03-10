@@ -9,10 +9,8 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
-import android.provider.MediaStore
 import android.view.View
 import android.view.WindowManager
-import android.widget.FrameLayout
 import android.widget.MediaController
 import android.widget.VideoView
 import androidx.activity.ComponentActivity
@@ -170,9 +168,9 @@ fun FileManagerScreen(
     var previewVideo by remember { mutableStateOf<String?>(null) }
     var showPreview by remember { mutableStateOf(false) }
     
-    // Thumbnail manager
-    val thumbnailManager = remember { ThumbnailManager(context) }
-    val thumbnails by thumbnailManager.thumbnails.collectAsState()
+    // Thumbnail manager - using simple mutableStateMap
+    val thumbnails = remember { mutableStateMapOf<String, Bitmap>() }
+    val thumbnailManager = remember { ThumbnailManager(context, thumbnails) }
     
     // Load files when path changes
     LaunchedEffect(currentPath) {
@@ -410,18 +408,16 @@ fun VideoPreviewPopup(
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
-    var isPlaying by remember { mutableStateOf(true) }
-    var currentPosition by remember { mutableStateOf(0) }
+    val videoUri = Uri.parse(videoPath)
     
-    // Create VideoView and MediaController
+    // Create VideoView with MediaController
     val videoView = remember {
         VideoView(context).apply {
-            setVideoURI(Uri.parse(videoPath))
+            setVideoURI(videoUri)
             
-            val mediaController = MediaController(context).apply {
-                setAnchorView(this@apply)
-                setMediaPlayer(this@apply)
-            }
+            // Create and set MediaController
+            val mediaController = MediaController(context)
+            mediaController.setAnchorView(this)
             setMediaController(mediaController)
             
             setOnPreparedListener { mp ->
@@ -658,13 +654,12 @@ fun getSdCardPath(): String? {
     return null
 }
 
-// Thumbnail Manager Class
-class ThumbnailManager(private val context: Context) {
+// Thumbnail Manager Class - simplified with mutableStateMap
+class ThumbnailManager(
+    private val context: Context,
+    private val thumbnails: MutableMap<String, Bitmap>
+) {
     private val thumbnailDir = File(context.cacheDir, "thumbnails")
-    private val _thumbnails = mutableStateOf<Map<String, Bitmap>>(emptyMap())
-    val thumbnails: State<Map<String, Bitmap>> = _thumbnails
-    
-    // We can set this to 1000 now since only visible ones are in RAM
     private val maxVideos = 1000
     private val videoQueue = mutableListOf<String>()
     
@@ -672,14 +667,13 @@ class ThumbnailManager(private val context: Context) {
         if (!thumbnailDir.exists()) {
             thumbnailDir.mkdirs()
         }
-        loadExistingThumbnails()
     }
     
     fun generateForFiles(files: List<FileItem>) {
         val videoFiles = files.filter { !it.isDirectory }
         
         videoFiles.forEach { file ->
-            if (!_thumbnails.value.containsKey(file.path)) {
+            if (!thumbnails.containsKey(file.path)) {
                 generateThumbnail(file.path)
             }
         }
@@ -723,7 +717,7 @@ class ThumbnailManager(private val context: Context) {
                 if (bitmap != null) {
                     // Update on main thread
                     (context as? MainActivity)?.runOnUiThread {
-                        _thumbnails.value = _thumbnails.value + (videoPath to bitmap)
+                        thumbnails[videoPath] = bitmap
                     }
                 }
             } catch (e: Exception) {
@@ -738,17 +732,12 @@ class ThumbnailManager(private val context: Context) {
         // Remove oldest if over limit
         while (videoQueue.size > maxVideos) {
             val oldest = videoQueue.removeAt(0)
-            _thumbnails.value = _thumbnails.value - oldest
+            thumbnails.remove(oldest)
             
             // Delete cached file
             val videoFile = File(oldest)
             val cacheFile = File(thumbnailDir, "${videoFile.nameWithoutExtension}.jpg")
             cacheFile.delete()
         }
-    }
-    
-    private fun loadExistingThumbnails() {
-        // This would need to map cached files to video paths
-        // Simplified for now
     }
 }
