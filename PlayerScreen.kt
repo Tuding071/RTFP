@@ -197,7 +197,7 @@ fun PlayerOverlay(
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     var seekDirection by remember { mutableStateOf("") }
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 0L
+    val seekThrottleMs = 16L
     
     var touchStartTime by remember { mutableStateOf(0L) }
     var touchStartX by remember { mutableStateOf(0f) }
@@ -403,7 +403,7 @@ fun PlayerOverlay(
         if (!isSeeking) return
         
         val deltaX = currentX - seekStartX
-        val pixelsPerSecond = 2f / 0.032f
+        val pixelsPerSecond = 4f / 0.032f
         val timeDeltaSeconds = deltaX / pixelsPerSecond
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = mpv.getPropertyDouble("duration") ?: 0.0
