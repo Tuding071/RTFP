@@ -180,7 +180,7 @@ fun FileManagerScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = if (currentPath == null) "Storage" else currentPath?.name ?: "",
+                    text = if (currentPath == null) "Storage" else currentPath?.path ?: "",
                     color = Color.White,
                     fontSize = 14.sp,
                     maxLines = 1,
@@ -194,22 +194,14 @@ fun FileManagerScreen(
                         fontSize = 16.sp,
                         modifier = Modifier
                             .clickable {
-                                // FIXED: Proper up navigation
+                                // FIXED: Simple and reliable up navigation like Version 1
                                 val parent = currentPath?.parentFile
-                                
                                 currentPath = when {
-                                    // If we're at internal storage root, go to main storage list
-                                    currentPath?.absolutePath == Environment.getExternalStorageDirectory().absolutePath -> {
-                                        null
-                                    }
-                                    // If parent is null or is root directory, go to main storage list
-                                    parent == null || parent.absolutePath == "/" || parent.absolutePath == "/storage" -> {
-                                        null
-                                    }
-                                    // Otherwise go to parent directory
-                                    else -> {
-                                        parent
-                                    }
+                                    parent == null -> null
+                                    parent.absolutePath == "/storage/emulated/0" -> null
+                                    parent.absolutePath == "/storage" -> null
+                                    parent.absolutePath == "/" -> null
+                                    else -> parent
                                 }
                             }
                             .padding(start = 16.dp)
@@ -280,14 +272,14 @@ fun getStorageRoots(): List<FileItem> {
         isDirectory = true
     ))
     
-    // FIXED: Better SD Card detection
-    val sdCardPaths = getSdCardPaths()
-    sdCardPaths.forEach { path ->
-        val file = File(path)
-        if (file.exists() && file.canRead() && file.isDirectory) {
+    // FIXED: Use Version 1's SD card detection which works
+    val sdCardPath = getSdCardPath()
+    if (sdCardPath != null) {
+        val sdCardFile = File(sdCardPath)
+        if (sdCardFile.exists() && sdCardFile.isDirectory) {
             roots.add(FileItem(
-                name = "SD Card (${file.name})",
-                path = file.absolutePath,
+                name = "SD Card",
+                path = sdCardPath,
                 isDirectory = true
             ))
         }
@@ -302,11 +294,10 @@ fun loadFiles(directory: File): List<FileItem> {
     val videoExtensions = setOf(".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".3gp")
     
     return directory.listFiles()?.filter { file ->
-        // Show all directories, but only video files
         file.isDirectory || videoExtensions.any { file.name.lowercase().endsWith(it) }
     }?.sortedWith(compareBy(
-        { !it.isDirectory }, // Directories first
-        { it.name.lowercase() } // Then alphabetically
+        { !it.isDirectory },
+        { it.name.lowercase() }
     ))?.map { file ->
         FileItem(
             name = file.name,
@@ -316,37 +307,45 @@ fun loadFiles(directory: File): List<FileItem> {
     } ?: emptyList()
 }
 
-// FIXED: Comprehensive SD card detection
-fun getSdCardPaths(): List<String> {
-    val sdCards = mutableListOf<String>()
-    
-    // Method 1: Check common SD card mount points
-    val possiblePaths = listOf(
+// FIXED: Using Version 1's working SD card detection
+fun getSdCardPath(): String? {
+    val storageDirs = listOf(
         "/storage/",
         "/mnt/sdcard/",
         "/mnt/extSdCard/",
         "/storage/sdcard1/",
         "/storage/extSdCard/",
-        "/storage/external_SD/",
+        "/storage/emulated/0/",  // Internal, but included for completeness
         "/storage/UsbDriveA/",
         "/storage/UsbDriveB/",
-        "/storage/emulated/0/", // Internal, but included for completeness
-        "/mnt/media_rw/",
-        "/storage/removable/",
-        "/storage/0/"
+        "/storage/external_SD/",
+        "/mnt/media_rw/"
     )
     
-    // Method 2: Check all directories in /storage that aren't emulated
+    // First check common paths
+    for (path in storageDirs) {
+        try {
+            val file = File(path)
+            if (file.exists() && file.canRead() && file.isDirectory && 
+                file.absolutePath != Environment.getExternalStorageDirectory().absolutePath) {
+                return path
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+    
+    // If not found, scan /storage directory
     try {
         val storageDir = File("/storage")
         if (storageDir.exists() && storageDir.isDirectory) {
             storageDir.listFiles()?.forEach { dir ->
                 if (dir.isDirectory && 
                     dir.canRead() && 
+                    dir.absolutePath != Environment.getExternalStorageDirectory().absolutePath &&
                     !dir.name.equals("emulated", ignoreCase = true) &&
-                    !dir.name.equals("self", ignoreCase = true) &&
-                    dir.absolutePath != Environment.getExternalStorageDirectory().absolutePath) {
-                    sdCards.add(dir.absolutePath)
+                    !dir.name.equals("self", ignoreCase = true)) {
+                    return dir.absolutePath
                 }
             }
         }
@@ -354,38 +353,5 @@ fun getSdCardPaths(): List<String> {
         e.printStackTrace()
     }
     
-    // Method 3: Check system environment for secondary storage
-    try {
-        val secondaryStorage = System.getenv("SECONDARY_STORAGE")
-        if (!secondaryStorage.isNullOrBlank()) {
-            secondaryStorage.split(":").forEach { path ->
-                if (File(path).exists()) {
-                    sdCards.add(path)
-                }
-            }
-        }
-    } catch (e: Exception) {
-        e.printStackTrace()
-    }
-    
-    // Method 4: Check external storage directories
-    try {
-        val externalDirs = Environment.getExternalStorageDirectory().listFiles()
-        externalDirs?.forEach { dir ->
-            if (dir.isDirectory && 
-                dir.canRead() && 
-                !dir.absolutePath.contains("emulated") &&
-                dir.absolutePath != Environment.getExternalStorageDirectory().absolutePath) {
-                sdCards.add(dir.absolutePath)
-            }
-        }
-    } catch (e: Exception) {
-        e.printStackTrace()
-    }
-    
-    // Remove duplicates and filter out invalid paths
-    return sdCards.distinct().filter { path ->
-        val file = File(path)
-        file.exists() && file.isDirectory && file.canRead() && file.listFiles() != null
-    }
+    return null
 }
