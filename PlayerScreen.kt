@@ -44,7 +44,7 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
 
     override fun postInitOptions() {
         // Performance
-        mpv.setOptionString("vd-lavc-threads", "1")
+        mpv.setOptionString("vd-lavc-threads", "8")
         mpv.setOptionString("demuxer-lavf-threads", "8")
         mpv.setOptionString("cache-initial", "0.5")
         mpv.setOptionString("untimed", "yes")
