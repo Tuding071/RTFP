@@ -1,18 +1,12 @@
 package com.rtfp.player
 
-import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
-import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
-import android.os.Handler
-import android.os.Looper
 import android.view.View
 import android.view.WindowManager
-import android.widget.FrameLayout
-import android.widget.VideoView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
@@ -21,39 +15,36 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.*
 
 class MainActivity : ComponentActivity() {
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Get initial video path from intent
+        // Get initial video path from intent (if opened from file manager)
         val initialVideoPath = extractVideoPath(intent)
+        
+        // Setup fullscreen for player only (file manager will show bars)
+        setupDisplay()
         
         // Keep screen on while activity is visible
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         
         setContent {
             MaterialTheme {
+                // STATE MANAGED IN COMPOSE
                 var videoPath by remember { mutableStateOf(initialVideoPath) }
                 var showFileManager by remember { mutableStateOf(initialVideoPath == null) }
                 
@@ -73,7 +64,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 
-                // Back handler
+                // BACK BUTTON HANDLER
                 DisposableEffect(showFileManager) {
                     val callback = object : OnBackPressedCallback(true) {
                         override fun handleOnBackPressed() {
@@ -86,7 +77,10 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     onBackPressedDispatcher.addCallback(callback)
-                    onDispose { callback.remove() }
+                    
+                    onDispose {
+                        callback.remove()
+                    }
                 }
                 
                 if (showFileManager) {
@@ -126,6 +120,11 @@ class MainActivity : ComponentActivity() {
         }
     }
     
+    private fun setupDisplay() {
+        // Don't set fullscreen here - will be handled by LaunchedEffect
+        WindowCompat.setDecorFitsSystemWindows(window, true)
+    }
+    
     private fun setOrientationForVideo(width: Int, height: Int) {
         requestedOrientation = if (width > height) {
             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -163,25 +162,26 @@ enum class SortOption {
 fun FileManagerScreen(
     onFileSelected: (String) -> Unit
 ) {
-    val context = LocalContext.current
     var currentPath by remember { mutableStateOf<File?>(null) }
     var files by remember { mutableStateOf<List<FileItem>>(emptyList()) }
     var sortOption by remember { mutableStateOf(SortOption.NAME_A_TO_Z) }
     var showSortMenu by remember { mutableStateOf(false) }
-    val listState = rememberLazyListState()
     
-    // Preview state
-    var previewVideo by remember { mutableStateOf<String?>(null) }
-    var showPreview by remember { mutableStateOf(false) }
+    // Cache file listings
+    val fileCache = remember { mutableMapOf<String, List<FileItem>>() }
     
     // Load files when path changes
     LaunchedEffect(currentPath) {
-        files = if (currentPath == null) {
-            getStorageRoots()
-        } else {
-            loadFiles(currentPath!!)
+        val pathKey = currentPath?.absolutePath ?: "root"
+        
+        files = fileCache.getOrPut(pathKey) {
+            if (currentPath == null) {
+                getStorageRoots()
+            } else {
+                loadFiles(currentPath!!)
+            }
         }
-        // Sort with folders on top
+        // Sort files
         files = sortFilesWithFoldersTop(files, sortOption)
     }
     
@@ -194,10 +194,10 @@ fun FileManagerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF1A1A1A))
-            .statusBarsPadding()
-            .navigationBarsPadding()
+            .statusBarsPadding()  // Add padding for status bar
+            .navigationBarsPadding()  // Add padding for nav bar
     ) {
-        // Header with path and sort button
+        // Header with Home, Sort, Up buttons
         HeaderSection(
             currentPath = currentPath,
             sortOption = sortOption,
@@ -206,6 +206,9 @@ fun FileManagerScreen(
             onSortOptionSelected = { 
                 sortOption = it
                 showSortMenu = false
+            },
+            onHomeClick = {
+                currentPath = null  // Go to root (Internal Storage & SD Card)
             },
             onUpClick = {
                 val parent = currentPath?.parentFile
@@ -220,59 +223,34 @@ fun FileManagerScreen(
         )
         
         // File list
-        Box(modifier = Modifier.fillMaxSize()) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(vertical = 8.dp)
-            ) {
-                items(files, key = { it.path }) { file ->
-                    FileListItem(
-                        file = file,
-                        onPreviewClick = {
-                            if (!file.isDirectory) {
-                                previewVideo = file.path
-                                showPreview = true
-                            }
-                        },
-                        onClick = {
-                            if (file.isDirectory) {
-                                currentPath = File(file.path)
-                            } else {
-                                onFileSelected(file.path)
-                            }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(vertical = 8.dp)
+        ) {
+            items(files, key = { it.path }) { file ->
+                FileListItem(
+                    file = file,
+                    onClick = {
+                        if (file.isDirectory) {
+                            currentPath = File(file.path)
+                        } else {
+                            onFileSelected(file.path)
                         }
-                    )
-                }
-            }
-            
-            // Sort menu overlay
-            if (showSortMenu) {
-                SortMenu(
-                    currentSort = sortOption,
-                    onSortSelected = { option ->
-                        sortOption = option
-                        showSortMenu = false
-                    },
-                    onDismiss = { showSortMenu = false }
-                )
-            }
-            
-            // Video preview popup with custom UI
-            if (showPreview && previewVideo != null) {
-                VideoPreviewPopup(
-                    videoPath = previewVideo!!,
-                    onOpen = {
-                        onFileSelected(previewVideo!!)
-                        showPreview = false
-                        previewVideo = null
-                    },
-                    onClose = {
-                        showPreview = false
-                        previewVideo = null
                     }
                 )
             }
+        }
+        
+        // Sort menu overlay
+        if (showSortMenu) {
+            SortMenu(
+                currentSort = sortOption,
+                onSortSelected = { option ->
+                    sortOption = option
+                    showSortMenu = false
+                },
+                onDismiss = { showSortMenu = false }
+            )
         }
     }
 }
@@ -284,57 +262,61 @@ fun HeaderSection(
     showSortMenu: Boolean,
     onSortClick: () -> Unit,
     onSortOptionSelected: (SortOption) -> Unit,
+    onHomeClick: () -> Unit,
     onUpClick: () -> Unit
 ) {
-    Row(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .background(Color(0xFF2A2A2A))
-            .padding(16.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+            .padding(16.dp)
     ) {
-        // Path and Up button
         Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
+            // Home button (left)
+            Text(
+                text = "Home",
+                color = Color.White,
+                fontSize = 16.sp,
+                modifier = Modifier
+                    .clickable { onHomeClick() }
+                    .padding(end = 8.dp)
+            )
+            
+            // Sort button (center)
+            Text(
+                text = "Sort: ${getSortDisplayName(sortOption)} ▼",
+                color = Color.White,
+                fontSize = 14.sp,
+                modifier = Modifier
+                    .clickable { onSortClick() }
+                    .padding(horizontal = 8.dp)
+            )
+            
+            // Up button (right) - only show if not at root
             if (currentPath != null) {
                 Text(
-                    text = "⬆ Up",
+                    text = "Up",
                     color = Color.White,
                     fontSize = 16.sp,
                     modifier = Modifier
                         .clickable { onUpClick() }
-                        .padding(end = 16.dp)
+                        .padding(start = 8.dp)
                 )
+            } else {
+                // Empty space for alignment when Up is hidden
+                Spacer(modifier = Modifier.width(40.dp))
             }
-            
-            Text(
-                text = if (currentPath == null) "Storage" else currentPath.name ?: "",
-                color = Color.White,
-                fontSize = 14.sp,
-                maxLines = 1,
-                modifier = Modifier.weight(1f)
-            )
         }
-        
-        // Sort button
-        Text(
-            text = "Sort: ${getSortDisplayName(sortOption)} ▼",
-            color = Color.White,
-            fontSize = 14.sp,
-            modifier = Modifier
-                .clickable { onSortClick() }
-                .padding(start = 8.dp)
-        )
     }
 }
 
 @Composable
 fun FileListItem(
     file: FileItem,
-    onPreviewClick: () -> Unit,
     onClick: () -> Unit
 ) {
     Row(
@@ -344,203 +326,20 @@ fun FileListItem(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Colored text
+        // Icon indicator
         Text(
-            text = file.name,
-            color = if (file.isDirectory) Color(0xFF4CAF50) else Color(0xFFF44336), // Green for folders, Red for videos
-            fontSize = 14.sp,
-            maxLines = 1,
-            modifier = Modifier.weight(1f)
+            text = if (file.isDirectory) "📁" else "🎬",
+            fontSize = 20.sp,
+            modifier = Modifier.padding(end = 12.dp)
         )
         
-        // Preview button for videos
-        if (!file.isDirectory) {
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "Preview",
-                color = Color(0xFF4CAF50),
-                fontSize = 12.sp,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(Color(0xFF2A2A2A))
-                    .clickable { onPreviewClick() }
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-            )
-        }
-    }
-}
-
-@Composable
-fun VideoPreviewPopup(
-    videoPath: String,
-    onOpen: () -> Unit,
-    onClose: () -> Unit
-) {
-    val context = LocalContext.current
-    val videoUri = Uri.parse(videoPath)
-    
-    // Player state
-    var isPlaying by remember { mutableStateOf(true) }
-    var currentPosition by remember { mutableStateOf(0) }
-    var duration by remember { mutableStateOf(0) }
-    val handler = remember { Handler(Looper.getMainLooper()) }
-    
-    // Create VideoView without default controls
-    val videoView = remember {
-        VideoView(context).apply {
-            setVideoURI(videoUri)
-            setOnPreparedListener { mp ->
-                duration = mp.duration
-                mp.isLooping = true
-                start()
-                
-                // Update progress
-                object : Runnable {
-                    override fun run() {
-                        if (isPlaying) {
-                            currentPosition = currentPosition
-                            handler.postDelayed(this, 100)
-                        }
-                    }
-                }.run()
-            }
-        }
-    }
-    
-    // Cleanup on dispose
-    DisposableEffect(Unit) {
-        onDispose {
-            videoView.stopPlayback()
-            handler.removeCallbacksAndMessages(null)
-        }
-    }
-    
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xCC000000))
-    ) {
-        // Preview container
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.9f)
-                .fillMaxHeight(0.6f)
-                .align(Alignment.Center)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color.Black)
-        ) {
-            Column(
-                modifier = Modifier.fillMaxSize()
-            ) {
-                // Header
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFF2A2A2A))
-                        .padding(8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Close button
-                    Text(
-                        text = "Close",
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(Color(0xFFF44336))
-                            .clickable { onClose() }
-                            .padding(horizontal = 12.dp, vertical = 4.dp)
-                    )
-                    
-                    // Filename
-                    Text(
-                        text = File(videoPath).name,
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        maxLines = 1,
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 8.dp)
-                    )
-                    
-                    // Open button
-                    Text(
-                        text = "Open",
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(Color(0xFF4CAF50))
-                            .clickable { onOpen() }
-                            .padding(horizontal = 12.dp, vertical = 4.dp)
-                    )
-                }
-                
-                // Video View
-                AndroidView(
-                    factory = { videoView },
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                )
-                
-                // Custom controls
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFF1A1A1A))
-                        .padding(8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Play/Pause button
-                    Text(
-                        text = if (isPlaying) "⏸" else "▶",
-                        color = Color.White,
-                        fontSize = 16.sp,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(Color(0xFF2A2A2A))
-                            .clickable {
-                                isPlaying = !isPlaying
-                                if (isPlaying) {
-                                    videoView.start()
-                                } else {
-                                    videoView.pause()
-                                }
-                            }
-                            .padding(8.dp)
-                    )
-                    
-                    // Seekbar
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(4.dp)
-                            .clip(RoundedCornerShape(2.dp))
-                            .background(Color(0xFF444444))
-                            .padding(horizontal = 8.dp)
-                    ) {
-                        // Progress indicator
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(currentPosition.toFloat() / (duration.toFloat() + 1))
-                                .fillMaxHeight()
-                                .background(Color(0xFF4CAF50))
-                        )
-                    }
-                    
-                    // Time text
-                    Text(
-                        text = "${formatTime(currentPosition)} / ${formatTime(duration)}",
-                        color = Color.Gray,
-                        fontSize = 10.sp,
-                        modifier = Modifier.padding(start = 8.dp)
-                    )
-                }
-            }
-        }
+        // File/folder name
+        Text(
+            text = file.name,
+            color = Color.White,
+            fontSize = 14.sp,
+            modifier = Modifier.weight(1f)
+        )
     }
 }
 
@@ -612,20 +411,6 @@ fun sortFilesWithFoldersTop(files: List<FileItem>, option: SortOption): List<Fil
     return sortedFolders + sortedVideos
 }
 
-fun formatFileSize(size: Long): String {
-    if (size <= 0) return "0 B"
-    val units = arrayOf("B", "KB", "MB", "GB")
-    val digitGroups = (Math.log10(size.toDouble()) / Math.log10(1024.0)).toInt()
-    return String.format("%.1f %s", size / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
-}
-
-fun formatTime(millis: Int): String {
-    val seconds = millis / 1000
-    val minutes = seconds / 60
-    val remainingSeconds = seconds % 60
-    return String.format("%d:%02d", minutes, remainingSeconds)
-}
-
 fun getStorageRoots(): List<FileItem> {
     val roots = mutableListOf<FileItem>()
     
@@ -660,16 +445,19 @@ fun loadFiles(directory: File): List<FileItem> {
     
     val videoExtensions = setOf(".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".3gp")
     
-    return directory.listFiles()?.mapNotNull { file ->
-        if (file.isDirectory || videoExtensions.any { file.name.lowercase().endsWith(it) }) {
-            FileItem(
-                name = file.name,
-                path = file.absolutePath,
-                isDirectory = file.isDirectory,
-                size = if (file.isFile) file.length() else 0,
-                lastModified = file.lastModified()
-            )
-        } else null
+    return directory.listFiles()?.filter { file ->
+        file.isDirectory || videoExtensions.any { file.name.lowercase().endsWith(it) }
+    }?.sortedWith(compareBy(
+        { !it.isDirectory },
+        { it.name.lowercase() }
+    ))?.map { file ->
+        FileItem(
+            name = file.name,
+            path = file.absolutePath,
+            isDirectory = file.isDirectory,
+            size = if (file.isFile) file.length() else 0,
+            lastModified = file.lastModified()
+        )
     } ?: emptyList()
 }
 
