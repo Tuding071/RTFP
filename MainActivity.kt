@@ -4,11 +4,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
+import android.media.ThumbnailUtils
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
+import android.provider.MediaStore
 import android.view.View
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -36,8 +37,9 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -52,7 +54,7 @@ class MainActivity : ComponentActivity() {
         // Get initial video path from intent
         val initialVideoPath = extractVideoPath(intent)
         
-        // Setup normal display (show status and nav bars)
+        // Setup display - show bars in file manager, hide in player
         setupDisplay()
         
         // Keep screen on while activity is visible
@@ -63,11 +65,16 @@ class MainActivity : ComponentActivity() {
                 var videoPath by remember { mutableStateOf(initialVideoPath) }
                 var showFileManager by remember { mutableStateOf(initialVideoPath == null) }
                 
-                // Simple back handler - just exits
-                DisposableEffect(Unit) {
+                // Back handler
+                DisposableEffect(showFileManager) {
                     val callback = object : OnBackPressedCallback(true) {
                         override fun handleOnBackPressed() {
-                            finish()
+                            if (showFileManager) {
+                                finish()
+                            } else {
+                                showFileManager = true
+                                videoPath = null
+                            }
                         }
                     }
                     onBackPressedDispatcher.addCallback(callback)
@@ -112,11 +119,8 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun setupDisplay() {
-        // Show system bars
+        // Show system bars by default
         WindowCompat.setDecorFitsSystemWindows(window, true)
-        
-        // Make status bar icons light for dark background
-        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
     }
     
     private fun setOrientationForVideo(width: Int, height: Int) {
@@ -162,11 +166,14 @@ fun FileManagerScreen(
     var sortOption by remember { mutableStateOf(SortOption.NAME_A_TO_Z) }
     var showSortMenu by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    var isScrolling by remember { mutableStateOf(false) }
+    
+    // Preview state
+    var previewVideo by remember { mutableStateOf<String?>(null) }
+    var showPreview by remember { mutableStateOf(false) }
     
     // Thumbnail manager
     val thumbnailManager = remember { ThumbnailManager(context) }
-    val thumbnails = thumbnailManager.thumbnails.collectAsState()
+    val thumbnails by thumbnailManager.thumbnails.collectAsState()
     
     // Load files when path changes
     LaunchedEffect(currentPath) {
@@ -186,17 +193,12 @@ fun FileManagerScreen(
         files = sortFilesWithFoldersTop(files, sortOption)
     }
     
-    // Detect scrolling
-    LaunchedEffect(listState.isScrollInProgress) {
-        isScrolling = listState.isScrollInProgress
-    }
-    
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF1A1A1A))
-            .statusBarsPadding() // Add padding for status bar
-            .navigationBarsPadding() // Add padding for nav bar
+            .statusBarsPadding()
+            .navigationBarsPadding()
     ) {
         // Header with path and sort button
         HeaderSection(
@@ -220,7 +222,7 @@ fun FileManagerScreen(
             }
         )
         
-        // List resize handle (1-20 items visible)
+        // File list
         Box(modifier = Modifier.fillMaxSize()) {
             LazyColumn(
                 state = listState,
@@ -230,7 +232,13 @@ fun FileManagerScreen(
                 items(files, key = { it.path }) { file ->
                     FileListItem(
                         file = file,
-                        thumbnails = if (!isScrolling) thumbnails.value[file.path] else null,
+                        thumbnail = thumbnails[file.path],
+                        onPreviewClick = {
+                            if (!file.isDirectory) {
+                                previewVideo = file.path
+                                showPreview = true
+                            }
+                        },
                         onClick = {
                             if (file.isDirectory) {
                                 currentPath = File(file.path)
@@ -251,6 +259,17 @@ fun FileManagerScreen(
                         showSortMenu = false
                     },
                     onDismiss = { showSortMenu = false }
+                )
+            }
+            
+            // Video preview popup
+            if (showPreview && previewVideo != null) {
+                VideoPreviewPopup(
+                    videoPath = previewVideo!!,
+                    onClose = {
+                        showPreview = false
+                        previewVideo = null
+                    }
                 )
             }
         }
@@ -314,21 +333,10 @@ fun HeaderSection(
 @Composable
 fun FileListItem(
     file: FileItem,
-    thumbnails: List<Bitmap>?,
+    thumbnail: Bitmap?,
+    onPreviewClick: () -> Unit,
     onClick: () -> Unit
 ) {
-    var currentFrame by remember { mutableStateOf(0) }
-    
-    // Handle thumbnail slideshow
-    LaunchedEffect(thumbnails) {
-        if (thumbnails != null && thumbnails.size > 1) {
-            while (true) {
-                delay(500) // 500ms per frame
-                currentFrame = (currentFrame + 1) % thumbnails.size
-            }
-        }
-    }
-    
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -336,26 +344,26 @@ fun FileListItem(
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Thumbnail or icon
+        // Thumbnail
         Box(
             modifier = Modifier
                 .size(60.dp)
                 .clip(RoundedCornerShape(4.dp))
                 .background(Color(0xFF333333))
         ) {
-            if (thumbnails != null && thumbnails.isNotEmpty()) {
-                // Show current frame of slideshow
+            if (thumbnail != null) {
                 androidx.compose.foundation.Image(
-                    bitmap = thumbnails[currentFrame].asImageBitmap(),
+                    bitmap = thumbnail.asImageBitmap(),
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
                 )
-            } else {
-                Text(
-                    text = if (file.isDirectory) "📁" else "🎬",
-                    fontSize = 24.sp,
-                    modifier = Modifier.align(Alignment.Center)
+            } else if (!file.isDirectory) {
+                // Placeholder for video without thumbnail
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color(0xFF444444))
                 )
             }
         }
@@ -363,7 +371,9 @@ fun FileListItem(
         Spacer(modifier = Modifier.width(12.dp))
         
         // File info
-        Column(modifier = Modifier.weight(1f)) {
+        Column(
+            modifier = Modifier.weight(1f)
+        ) {
             Text(
                 text = file.name,
                 color = Color.White,
@@ -376,6 +386,105 @@ fun FileListItem(
                 color = Color.Gray,
                 fontSize = 12.sp
             )
+        }
+        
+        // Preview button for videos
+        if (!file.isDirectory) {
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Preview",
+                color = Color(0xFF4CAF50),
+                fontSize = 12.sp,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0xFF2A2A2A))
+                    .clickable { onPreviewClick() }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun VideoPreviewPopup(
+    videoPath: String,
+    onClose: () -> Unit
+) {
+    val context = LocalContext.current
+    
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xCC000000))
+            .clickable { onClose() }
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth(0.9f)
+                .fillMaxHeight(0.7f)
+                .align(Alignment.Center)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color.Black)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize()
+            ) {
+                // Header with close button
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF2A2A2A))
+                        .padding(8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "✕ Close",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        modifier = Modifier
+                            .clickable { onClose() }
+                            .padding(4.dp)
+                    )
+                    
+                    Text(
+                        text = File(videoPath).name,
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
+                    )
+                }
+                
+                // Video player surface (simplified - would need ExoPlayer)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .background(Color.Black)
+                ) {
+                    Text(
+                        text = "Video Preview",
+                        color = Color.White,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+                
+                // Seekbar placeholder
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF1A1A1A))
+                        .padding(8.dp),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = "0:00 / 0:00",
+                        color = Color.Gray,
+                        fontSize = 12.sp
+                    )
+                }
+            }
         }
     }
 }
@@ -545,63 +654,70 @@ fun getSdCardPath(): String? {
 
 // Thumbnail Manager Class
 class ThumbnailManager(private val context: Context) {
-    private val thumbnailDir = File(context.cacheDir, "video_thumbnails")
-    private val executor = Executors.newSingleThreadExecutor()
-    private val _thumbnails = MutableStateFlow<Map<String, List<Bitmap>>>(emptyMap())
-    val thumbnails: MutableStateFlow<Map<String, List<Bitmap>>> = _thumbnails
+    private val thumbnailDir = File(context.cacheDir, "thumbnails")
+    private val _thumbnails = mutableStateOf<Map<String, Bitmap>>(emptyMap())
+    val thumbnails: State<Map<String, Bitmap>> = _thumbnails
     
     // Limit to 200 videos
     private val maxVideos = 200
-    private val videoList = mutableListOf<String>()
+    private val videoQueue = mutableListOf<String>()
     
     init {
         if (!thumbnailDir.exists()) {
             thumbnailDir.mkdirs()
         }
-        cleanupOldThumbnails()
+        loadExistingThumbnails()
     }
     
     fun generateForFiles(files: List<FileItem>) {
         val videoFiles = files.filter { !it.isDirectory }
         
-        // Update video list and enforce limit
-        videoList.addAll(videoFiles.map { it.path })
-        while (videoList.size > maxVideos) {
-            val oldest = videoList.removeAt(0)
-            deleteThumbnails(oldest)
-        }
-        
-        // Generate thumbnails for new videos
         videoFiles.forEach { file ->
             if (!_thumbnails.value.containsKey(file.path)) {
-                generateThumbnails(file.path)
+                generateThumbnail(file.path)
             }
         }
     }
     
-    private fun generateThumbnails(videoPath: String) {
-        executor.execute {
+    private fun generateThumbnail(videoPath: String) {
+        // Run in background
+        CoroutineScope(Dispatchers.IO).launch {
             try {
+                // Check cache first
                 val videoFile = File(videoPath)
-                if (!videoFile.exists()) return@execute
+                val cacheFile = File(thumbnailDir, "${videoFile.nameWithoutExtension}.jpg")
                 
-                // Check if already cached
-                val cacheKey = videoFile.nameWithoutExtension
-                val cachedFile = File(thumbnailDir, "${cacheKey}_frames.dat")
-                
-                val frames = if (cachedFile.exists()) {
-                    // Load from cache
-                    loadFramesFromCache(cachedFile)
+                val bitmap = if (cacheFile.exists()) {
+                    BitmapFactory.decodeFile(cacheFile.absolutePath)
                 } else {
-                    // Generate new frames
-                    generateFrames(videoPath).also { frames ->
-                        // Cache the frames
-                        saveFramesToCache(cachedFile, frames)
+                    // Generate new thumbnail
+                    val retriever = MediaMetadataRetriever()
+                    retriever.setDataSource(videoPath)
+                    val frame = retriever.getFrameAtTime(1000000) // 1 second
+                    retriever.release()
+                    
+                    if (frame != null) {
+                        // Scale to thumbnail size
+                        val scaled = Bitmap.createScaledBitmap(frame, 120, 120, true)
+                        
+                        // Save to cache
+                        FileOutputStream(cacheFile).use { out ->
+                            scaled.compress(Bitmap.CompressFormat.JPEG, 80, out)
+                        }
+                        
+                        // Manage cache size
+                        manageCache(videoPath)
+                        
+                        scaled
+                    } else {
+                        null
                     }
                 }
                 
-                if (frames.isNotEmpty()) {
-                    _thumbnails.value = _thumbnails.value + (videoPath to frames)
+                if (bitmap != null) {
+                    withContext(Dispatchers.Main) {
+                        _thumbnails.value = _thumbnails.value + (videoPath to bitmap)
+                    }
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -609,70 +725,26 @@ class ThumbnailManager(private val context: Context) {
         }
     }
     
-    private fun generateFrames(videoPath: String): List<Bitmap> {
-        val frames = mutableListOf<Bitmap>()
-        val retriever = MediaMetadataRetriever()
+    private fun manageCache(videoPath: String) {
+        videoQueue.add(videoPath)
         
-        try {
-            retriever.setDataSource(videoPath)
-            val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0
+        // Remove oldest if over limit
+        while (videoQueue.size > maxVideos) {
+            val oldest = videoQueue.removeAt(0)
+            _thumbnails.value = _thumbnails.value - oldest
             
-            if (duration > 0) {
-                // Get 10 frames at different positions
-                for (i in 0 until 10) {
-                    val timeUs = (duration * 1000 * i / 9) // 0 to 100% in 9 steps
-                    val bitmap = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
-                    if (bitmap != null) {
-                        // Scale to thumbnail size
-                        val scaled = Bitmap.createScaledBitmap(bitmap, 120, 120, true)
-                        frames.add(scaled)
-                        bitmap.recycle()
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        } finally {
-            retriever.release()
-        }
-        
-        return frames
-    }
-    
-    private fun saveFramesToCache(file: File, frames: List<Bitmap>) {
-        try {
-            FileOutputStream(file).use { out ->
-                // Write number of frames
-                out.write(frames.size)
-                
-                frames.forEach { bitmap ->
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 70, out)
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
+            // Delete cached file
+            val videoFile = File(oldest)
+            val cacheFile = File(thumbnailDir, "${videoFile.nameWithoutExtension}.jpg")
+            cacheFile.delete()
         }
     }
     
-    private fun loadFramesFromCache(file: File): List<Bitmap> {
-        // Simplified - in real implementation would read and decode
-        return emptyList()
-    }
-    
-    private fun deleteThumbnails(videoPath: String) {
-        _thumbnails.value = _thumbnails.value - videoPath
-        // Also delete cached files
-        val videoFile = File(videoPath)
-        val cacheFile = File(thumbnailDir, "${videoFile.nameWithoutExtension}_frames.dat")
-        cacheFile.delete()
-    }
-    
-    private fun cleanupOldThumbnails() {
-        // Delete thumbnails older than 7 days
-        val weekAgo = System.currentTimeMillis() - (7 * 24 * 60 * 60 * 1000)
+    private fun loadExistingThumbnails() {
         thumbnailDir.listFiles()?.forEach { file ->
-            if (file.lastModified() < weekAgo) {
-                file.delete()
+            if (file.extension == "jpg") {
+                // Would need to map back to video paths
+                // This is simplified
             }
         }
     }
