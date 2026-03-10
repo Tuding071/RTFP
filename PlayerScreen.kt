@@ -81,11 +81,14 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
 
     override fun observeProperties() {}
     
-    // Fast scrubbing methods
+    // Fast scrubbing methods - using correct MPV API
     fun onHorizontalDragOrSeekStart() {
+        // Check if playing by getting pause property
+        val isPaused = mpv.getPropertyBoolean("pause") ?: true
+        
         // If not paused, pause first
-        if (!mpv.isPaused()) {
-            mpv.pause()
+        if (!isPaused) {
+            mpv.setPropertyBoolean("pause", true)
             wasPlayingBeforeDrag = true
         } else {
             wasPlayingBeforeDrag = false
@@ -97,8 +100,8 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
     }
     
     fun onHorizontalDragOrSeekMove(position: Long) {
-        // Seek to the current position during drag
-        mpv.seek(position)
+        // Seek to the current position during drag using command
+        mpv.command("seek", position.toString(), "absolute", "exact")
         // Frame displays immediately because untimed=yes
     }
     
@@ -108,11 +111,11 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         mpv.setOptionString("vd-lavc-skiploopfilter", "nonref") // restore permanent quality
         
         // Final seek to ensure audio/video sync is rebuilt
-        mpv.seek(finalPosition)
+        mpv.command("seek", finalPosition.toString(), "absolute", "exact")
         
         // Resume playback if it was playing before
         if (wasPlayingBeforeDrag) {
-            mpv.resume()
+            mpv.setPropertyBoolean("pause", false)
         }
     }
 }
