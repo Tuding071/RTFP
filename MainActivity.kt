@@ -1,7 +1,9 @@
 package com.rtfp.player
 
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
@@ -21,6 +23,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
@@ -162,9 +165,17 @@ enum class SortOption {
 fun FileManagerScreen(
     onFileSelected: (String) -> Unit
 ) {
+    val context = LocalContext.current
     var currentPath by remember { mutableStateOf<File?>(null) }
     var files by remember { mutableStateOf<List<FileItem>>(emptyList()) }
-    var sortOption by remember { mutableStateOf(SortOption.NAME_A_TO_Z) }
+    
+    // Load saved sort option
+    val prefs = remember { context.getSharedPreferences("rtfp_prefs", Context.MODE_PRIVATE) }
+    var sortOption by remember {
+        mutableStateOf(
+            SortOption.values()[prefs.getInt("sort_option", SortOption.NAME_A_TO_Z.ordinal)]
+        )
+    }
     var showSortMenu by remember { mutableStateOf(false) }
     
     // Cache file listings
@@ -185,30 +196,28 @@ fun FileManagerScreen(
         files = sortFilesWithFoldersTop(files, sortOption)
     }
     
-    // Re-sort when sort option changes
+    // Re-sort when sort option changes and save preference
     LaunchedEffect(sortOption) {
         files = sortFilesWithFoldersTop(files, sortOption)
+        // Save to SharedPreferences
+        prefs.edit().putInt("sort_option", sortOption.ordinal).apply()
     }
     
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF1A1A1A))
-            .statusBarsPadding()  // Add padding for status bar
-            .navigationBarsPadding()  // Add padding for nav bar
+            .statusBarsPadding()
+            .navigationBarsPadding()
     ) {
         // Header with Home, Sort, Up buttons
         HeaderSection(
             currentPath = currentPath,
             sortOption = sortOption,
             showSortMenu = showSortMenu,
-            onSortClick = { showSortMenu = !showSortMenu },
-            onSortOptionSelected = { 
-                sortOption = it
-                showSortMenu = false
-            },
+            onSortClick = { showSortMenu = true },
             onHomeClick = {
-                currentPath = null  // Go to root (Internal Storage & SD Card)
+                currentPath = null
             },
             onUpClick = {
                 val parent = currentPath?.parentFile
@@ -240,18 +249,18 @@ fun FileManagerScreen(
                 )
             }
         }
-        
-        // Sort menu overlay
-        if (showSortMenu) {
-            SortMenu(
-                currentSort = sortOption,
-                onSortSelected = { option ->
-                    sortOption = option
-                    showSortMenu = false
-                },
-                onDismiss = { showSortMenu = false }
-            )
-        }
+    }
+    
+    // Sort menu overlay - moved outside Column to be on top
+    if (showSortMenu) {
+        SortMenu(
+            currentSort = sortOption,
+            onSortSelected = { option ->
+                sortOption = option
+                showSortMenu = false
+            },
+            onDismiss = { showSortMenu = false }
+        )
     }
 }
 
@@ -261,7 +270,6 @@ fun HeaderSection(
     sortOption: SortOption,
     showSortMenu: Boolean,
     onSortClick: () -> Unit,
-    onSortOptionSelected: (SortOption) -> Unit,
     onHomeClick: () -> Unit,
     onUpClick: () -> Unit
 ) {
@@ -286,14 +294,16 @@ fun HeaderSection(
                     .padding(end = 8.dp)
             )
             
-            // Sort button (center)
+            // Sort button (center) - make it more clickable
             Text(
                 text = "Sort: ${getSortDisplayName(sortOption)} ▼",
                 color = Color.White,
                 fontSize = 14.sp,
                 modifier = Modifier
                     .clickable { onSortClick() }
-                    .padding(horizontal = 8.dp)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .background(Color(0xFF3A3A3A), shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
             )
             
             // Up button (right) - only show if not at root
@@ -357,7 +367,8 @@ fun SortMenu(
     ) {
         Column(
             modifier = Modifier
-                .align(Alignment.TopEnd)
+                .align(Alignment.TopCenter)
+                .padding(top = 100.dp)
                 .background(Color(0xFF2A2A2A))
                 .padding(8.dp)
                 .width(200.dp)
