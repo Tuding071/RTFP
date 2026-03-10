@@ -8,7 +8,18 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -16,7 +27,6 @@ import androidx.core.view.WindowInsetsControllerCompat
 class MainActivity : ComponentActivity() {
     
     private var videoPath: String? = null
-    private var shouldFinishOnBack = true
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -24,7 +34,7 @@ class MainActivity : ComponentActivity() {
         // Get video path from intent
         videoPath = extractVideoPath(intent)
         
-        // Setup fullscreen immersive mode
+        // Set up fullscreen immersive mode
         setupFullscreen()
         
         // Keep screen on while activity is visible
@@ -39,13 +49,65 @@ class MainActivity : ComponentActivity() {
         
         setContent {
             MaterialTheme {
-                PlayerScreen(
-                    videoPath = videoPath,
-                    onVideoLoaded = { width, height ->
-                        setOrientationForVideo(width, height)
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = Color.DarkGray.copy(alpha = 0.9f) // Slightly softer dark gray
+                ) {
+                    if (videoPath == null) {
+                        // Show splash/instruction screen when no video is playing
+                        SplashContent()
+                    } else {
+                        PlayerScreen(
+                            videoPath = videoPath,
+                            onVideoLoaded = { width, height ->
+                                setOrientationForVideo(width, height)
+                            }
+                        )
                     }
-                )
+                }
             }
+        }
+    }
+    
+    @Composable
+    private fun SplashContent() {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            // App name - large and bold
+            Text(
+                text = "RTFP",
+                fontSize = 72.sp,
+                fontWeight = FontWeight.ExtraBold,
+                fontFamily = FontFamily.Default,
+                color = Color.White
+            )
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            // Full app name
+            Text(
+                text = "Real-Time Frame Player",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Medium,
+                fontFamily = FontFamily.Default,
+                color = Color.White.copy(alpha = 0.9f)
+            )
+            
+            Spacer(modifier = Modifier.height(48.dp))
+            
+            // Instructions
+            Text(
+                text = "Open a video file using any file manager\nto start playback",
+                fontSize = 16.sp,
+                fontFamily = FontFamily.Default,
+                color = Color.White.copy(alpha = 0.7f),
+                lineHeight = 24.sp
+            )
         }
     }
     
