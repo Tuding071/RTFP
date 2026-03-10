@@ -7,6 +7,7 @@ import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
+import android.media.ThumbnailUtils
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -37,8 +39,6 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -108,10 +108,6 @@ class MainActivity : ComponentActivity() {
                             videoPath = videoPath,
                             onVideoLoaded = { width, height ->
                                 setOrientationForVideo(width, height)
-                            },
-                            onBackToFiles = {
-                                showFileManager = true
-                                videoPath = null
                             }
                         )
                     }
@@ -188,7 +184,7 @@ fun FileManagerScreen(
     val coroutineScope = rememberCoroutineScope()
     
     // Cache for thumbnails
-    val thumbnailCache = remember { mutableMapOf<String, String>() }
+    val thumbnailCache = remember { mutableStateMapOf<String, Bitmap?>() }
     val thumbnailGenerator = remember { ThumbnailGenerator(context) }
     
     // Load files when path changes
@@ -252,7 +248,7 @@ fun FileManagerScreen(
                 items(files, key = { it.path }) { file ->
                     FileListItem(
                         file = file,
-                        thumbnailCache = thumbnailCache,
+                        thumbnailBitmap = thumbnailCache[file.path],
                         onClick = {
                             if (file.isDirectory) {
                                 currentPath = File(file.path)
@@ -366,18 +362,13 @@ fun FileCountHeader(count: Int) {
 @Composable
 fun FileListItem(
     file: FileItem,
-    thumbnailCache: Map<String, String>,
+    thumbnailBitmap: Bitmap?,
     onClick: () -> Unit
 ) {
-    var isPressed by remember { mutableStateOf(false) }
-    val coroutineScope = rememberCoroutineScope()
-    val context = LocalContext.current
-    
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .background(if (isPressed) Color(0xFF3A3A3A) else Color.Transparent)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -385,15 +376,14 @@ fun FileListItem(
         Box(
             modifier = Modifier
                 .size(50.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(Color(0xFF333333))
                 .padding(end = 12.dp)
         ) {
-            if (!file.isDirectory && thumbnailCache.containsKey(file.path)) {
-                // Show thumbnail
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(File(thumbnailCache[file.path]!!))
-                        .crossfade(true)
-                        .build(),
+            if (thumbnailBitmap != null) {
+                // Show thumbnail using Android's native Canvas
+                androidx.compose.foundation.Image(
+                    bitmap = thumbnailBitmap.asImageBitmap(),
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
@@ -435,17 +425,6 @@ fun FileListItem(
                     fontSize = 12.sp
                 )
             }
-        }
-        
-        // Long press preview (simplified - would need ExoPlayer for actual preview)
-        if (isPressed && !file.isDirectory) {
-            // Show preview indicator
-            Text(
-                text = "▶",
-                color = Color.White,
-                fontSize = 20.sp,
-                modifier = Modifier.padding(start = 8.dp)
-            )
         }
     }
 }
@@ -614,18 +593,11 @@ fun getSdCardPath(): String? {
     return null
 }
 
-// Thumbnail Generator Class
+// Thumbnail Generator Class using Android native ThumbnailUtils
 class ThumbnailGenerator(private val context: Context) {
     private val executor = Executors.newSingleThreadExecutor()
-    private val thumbnailDir = File(context.cacheDir, "thumbnails")
     
-    init {
-        if (!thumbnailDir.exists()) {
-            thumbnailDir.mkdirs()
-        }
-    }
-    
-    fun generateThumbnail(videoPath: String, callback: (String?) -> Unit) {
+    fun generateThumbnail(videoPath: String, callback: (Bitmap?) -> Unit) {
         executor.execute {
             try {
                 val videoFile = File(videoPath)
@@ -634,49 +606,17 @@ class ThumbnailGenerator(private val context: Context) {
                     return@execute
                 }
                 
-                val thumbnailFile = File(thumbnailDir, "${videoFile.nameWithoutExtension}.jpg")
-                if (thumbnailFile.exists()) {
-                    callback(thumbnailFile.absolutePath)
-                    return@execute
-                }
+                // Use Android's native ThumbnailUtils
+                val bitmap = ThumbnailUtils.createVideoThumbnail(
+                    videoPath,
+                    MediaStore.Video.Thumbnails.MINI_KIND
+                )
                 
-                val retriever = MediaMetadataRetriever()
-                retriever.setDataSource(videoPath)
+                callback(bitmap)
                 
-                // Get frame at 1 second
-                val bitmap = retriever.getFrameAtTime(1000000) // 1 second in microseconds
-                
-                if (bitmap != null) {
-                    // Scale bitmap to thumbnail size
-                    val scaledBitmap = Bitmap.createScaledBitmap(bitmap, 150, 150, true)
-                    
-                    // Save to cache
-                    FileOutputStream(thumbnailFile).use { out ->
-                        scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 80, out)
-                    }
-                    
-                    scaledBitmap.recycle()
-                    bitmap.recycle()
-                    
-                    callback(thumbnailFile.absolutePath)
-                } else {
-                    callback(null)
-                }
-                
-                retriever.release()
             } catch (e: Exception) {
                 e.printStackTrace()
                 callback(null)
-            }
-        }
-    }
-    
-    fun cleanup() {
-        // Delete old thumbnails (older than 7 days)
-        val sevenDaysAgo = System.currentTimeMillis() - (7 * 24 * 60 * 60 * 1000)
-        thumbnailDir.listFiles()?.forEach { file ->
-            if (file.lastModified() < sevenDaysAgo) {
-                file.delete()
             }
         }
     }
@@ -686,13 +626,13 @@ class ThumbnailGenerator(private val context: Context) {
 fun generateThumbnails(
     files: List<FileItem>,
     generator: ThumbnailGenerator,
-    cache: MutableMap<String, String>
+    cache: MutableMap<String, Bitmap?>
 ) {
     files.filter { !it.isDirectory }.forEach { file ->
         if (!cache.containsKey(file.path)) {
-            generator.generateThumbnail(file.path) { thumbnailPath ->
-                if (thumbnailPath != null) {
-                    cache[file.path] = thumbnailPath
+            generator.generateThumbnail(file.path) { bitmap ->
+                if (bitmap != null) {
+                    cache[file.path] = bitmap
                 }
             }
         }
