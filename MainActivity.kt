@@ -3,12 +3,15 @@ package com.rtfp.player
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.WindowManager
-import android.widget.MediaController
+import android.widget.FrameLayout
 import android.widget.VideoView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -54,9 +57,6 @@ class MainActivity : ComponentActivity() {
                 var videoPath by remember { mutableStateOf(initialVideoPath) }
                 var showFileManager by remember { mutableStateOf(initialVideoPath == null) }
                 
-                // Reset to root when returning to file manager
-                val resetToRoot = remember { mutableStateOf(true) }
-                
                 // Handle system bars based on screen
                 LaunchedEffect(showFileManager) {
                     if (showFileManager) {
@@ -82,7 +82,6 @@ class MainActivity : ComponentActivity() {
                             } else {
                                 showFileManager = true
                                 videoPath = null
-                                resetToRoot.value = true // Reset to root when going back
                             }
                         }
                     }
@@ -93,8 +92,6 @@ class MainActivity : ComponentActivity() {
                 if (showFileManager) {
                     key("file-manager") {
                         FileManagerScreen(
-                            resetToRoot = resetToRoot.value,
-                            onResetComplete = { resetToRoot.value = false },
                             onFileSelected = { path ->
                                 videoPath = "file://$path"
                                 showFileManager = false
@@ -164,8 +161,6 @@ enum class SortOption {
 
 @Composable
 fun FileManagerScreen(
-    resetToRoot: Boolean,
-    onResetComplete: () -> Unit,
     onFileSelected: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -178,14 +173,6 @@ fun FileManagerScreen(
     // Preview state
     var previewVideo by remember { mutableStateOf<String?>(null) }
     var showPreview by remember { mutableStateOf(false) }
-    
-    // Reset to root when requested
-    LaunchedEffect(resetToRoot) {
-        if (resetToRoot) {
-            currentPath = null
-            onResetComplete()
-        }
-    }
     
     // Load files when path changes
     LaunchedEffect(currentPath) {
@@ -248,14 +235,11 @@ fun FileManagerScreen(
                                 showPreview = true
                             }
                         },
-                        onTitleClick = {
-                            if (!file.isDirectory) {
-                                onFileSelected(file.path)
-                            }
-                        },
-                        onFolderClick = {
+                        onClick = {
                             if (file.isDirectory) {
                                 currentPath = File(file.path)
+                            } else {
+                                onFileSelected(file.path)
                             }
                         }
                     )
@@ -274,10 +258,15 @@ fun FileManagerScreen(
                 )
             }
             
-            // Video preview popup with native VideoView
+            // Video preview popup with custom UI
             if (showPreview && previewVideo != null) {
                 VideoPreviewPopup(
                     videoPath = previewVideo!!,
+                    onOpen = {
+                        onFileSelected(previewVideo!!)
+                        showPreview = false
+                        previewVideo = null
+                    },
                     onClose = {
                         showPreview = false
                         previewVideo = null
@@ -346,51 +335,23 @@ fun HeaderSection(
 fun FileListItem(
     file: FileItem,
     onPreviewClick: () -> Unit,
-    onTitleClick: () -> Unit,
-    onFolderClick: () -> Unit
+    onClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable { onClick() }
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // File info - clickable area for folders or video title
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .then(
-                    if (file.isDirectory) {
-                        Modifier.clickable { onFolderClick() }
-                    } else {
-                        Modifier
-                    }
-                )
-        ) {
-            // Video title with color (clickable only for videos)
-            if (!file.isDirectory) {
-                Text(
-                    text = file.name,
-                    color = Color(0xFFF44336), // Red for videos
-                    fontSize = 14.sp,
-                    maxLines = 1,
-                    modifier = Modifier.clickable { onTitleClick() }
-                )
-            } else {
-                Text(
-                    text = file.name,
-                    color = Color(0xFF4CAF50), // Green for folders
-                    fontSize = 14.sp,
-                    maxLines = 1
-                )
-            }
-            
-            Text(
-                text = if (file.isDirectory) "Folder" else formatFileSize(file.size),
-                color = Color.Gray,
-                fontSize = 12.sp
-            )
-        }
+        // Colored text
+        Text(
+            text = file.name,
+            color = if (file.isDirectory) Color(0xFF4CAF50) else Color(0xFFF44336), // Green for folders, Red for videos
+            fontSize = 14.sp,
+            maxLines = 1,
+            modifier = Modifier.weight(1f)
+        )
         
         // Preview button for videos
         if (!file.isDirectory) {
@@ -412,31 +373,45 @@ fun FileListItem(
 @Composable
 fun VideoPreviewPopup(
     videoPath: String,
+    onOpen: () -> Unit,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
     val videoUri = Uri.parse(videoPath)
     
-    // Create VideoView with MediaController
+    // Player state
+    var isPlaying by remember { mutableStateOf(true) }
+    var currentPosition by remember { mutableStateOf(0) }
+    var duration by remember { mutableStateOf(0) }
+    val handler = remember { Handler(Looper.getMainLooper()) }
+    
+    // Create VideoView without default controls
     val videoView = remember {
         VideoView(context).apply {
             setVideoURI(videoUri)
-            
-            // Create and set MediaController
-            val mediaController = MediaController(context)
-            mediaController.setAnchorView(this)
-            setMediaController(mediaController)
-            
             setOnPreparedListener { mp ->
+                duration = mp.duration
                 mp.isLooping = true
                 start()
+                
+                // Update progress
+                object : Runnable {
+                    override fun run() {
+                        if (isPlaying) {
+                            currentPosition = currentPosition
+                            handler.postDelayed(this, 100)
+                        }
+                    }
+                }.run()
             }
         }
     }
     
+    // Cleanup on dispose
     DisposableEffect(Unit) {
         onDispose {
             videoView.stopPlayback()
+            handler.removeCallbacksAndMessages(null)
         }
     }
     
@@ -457,7 +432,7 @@ fun VideoPreviewPopup(
             Column(
                 modifier = Modifier.fillMaxSize()
             ) {
-                // Header with close button
+                // Header
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -466,15 +441,19 @@ fun VideoPreviewPopup(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // Close button
                     Text(
-                        text = "✕ Close",
+                        text = "Close",
                         color = Color.White,
                         fontSize = 14.sp,
                         modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0xFFF44336))
                             .clickable { onClose() }
-                            .padding(4.dp)
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
                     )
                     
+                    // Filename
                     Text(
                         text = File(videoPath).name,
                         color = Color.White,
@@ -484,15 +463,82 @@ fun VideoPreviewPopup(
                             .weight(1f)
                             .padding(horizontal = 8.dp)
                     )
+                    
+                    // Open button
+                    Text(
+                        text = "Open",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0xFF4CAF50))
+                            .clickable { onOpen() }
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
                 }
                 
-                // Native VideoView
+                // Video View
                 AndroidView(
                     factory = { videoView },
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
                 )
+                
+                // Custom controls
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF1A1A1A))
+                        .padding(8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Play/Pause button
+                    Text(
+                        text = if (isPlaying) "⏸" else "▶",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0xFF2A2A2A))
+                            .clickable {
+                                isPlaying = !isPlaying
+                                if (isPlaying) {
+                                    videoView.start()
+                                } else {
+                                    videoView.pause()
+                                }
+                            }
+                            .padding(8.dp)
+                    )
+                    
+                    // Seekbar
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(Color(0xFF444444))
+                            .padding(horizontal = 8.dp)
+                    ) {
+                        // Progress indicator
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(currentPosition.toFloat() / (duration.toFloat() + 1))
+                                .fillMaxHeight()
+                                .background(Color(0xFF4CAF50))
+                        )
+                    }
+                    
+                    // Time text
+                    Text(
+                        text = "${formatTime(currentPosition)} / ${formatTime(duration)}",
+                        color = Color.Gray,
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
             }
         }
     }
@@ -571,6 +617,13 @@ fun formatFileSize(size: Long): String {
     val units = arrayOf("B", "KB", "MB", "GB")
     val digitGroups = (Math.log10(size.toDouble()) / Math.log10(1024.0)).toInt()
     return String.format("%.1f %s", size / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
+}
+
+fun formatTime(millis: Int): String {
+    val seconds = millis / 1000
+    val minutes = seconds / 60
+    val remainingSeconds = seconds % 60
+    return String.format("%d:%02d", minutes, remainingSeconds)
 }
 
 fun getStorageRoots(): List<FileItem> {
