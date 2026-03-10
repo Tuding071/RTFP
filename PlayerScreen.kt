@@ -428,9 +428,6 @@ fun PlayerOverlay(
     
     fun endHorizontalSeeking() {
         if (isSeeking) {
-            // Get final position
-            val finalPos = mpv.getPropertyDouble("time-pos") ?: seekStartPosition
-            
             // Disable seeking optimizations first
             mpv.setPropertyString("untimed", "no")
             mpv.setPropertyString("video-sync", "display-resample")
@@ -439,14 +436,11 @@ fun PlayerOverlay(
                 // Small delay for options to apply
                 delay(50)
                 
-                // Final seek to exact position in normal mode
-                mpv.command("seek", finalPos.toString(), "absolute", "exact")
-                
-                // Resume if it was playing before
+                // Resume if it was playing before seek (no final seek needed)
                 if (wasPlayingBeforeSeek) {
-                    delay(50) // Small delay after seek
                     mpv.setPropertyBoolean("pause", false)
                 }
+                // If it was paused before seek, do nothing - stay paused
             }
             
             isSeeking = false
@@ -577,9 +571,6 @@ fun PlayerOverlay(
     fun handleDragFinished() {
         isDragging = false
         
-        // Get final position
-        val finalPos = mpv.getPropertyDouble("time-pos") ?: seekbarPosition.toDouble()
-        
         // Disable seeking optimizations first
         mpv.setPropertyString("untimed", "no")
         mpv.setPropertyString("video-sync", "display-resample")
@@ -588,14 +579,11 @@ fun PlayerOverlay(
             // Small delay for options to apply
             delay(50)
             
-            // Final seek to exact position in normal mode
-            mpv.command("seek", finalPos.toString(), "absolute", "exact")
-            
-            // Resume if it was playing before
+            // Resume if it was playing before seek (no final seek needed)
             if (wasPlayingBeforeSeek) {
-                delay(50) // Small delay after seek
                 mpv.setPropertyBoolean("pause", false)
             }
+            // If it was paused before seek, do nothing - stay paused
         }
         
         isSeeking = false
