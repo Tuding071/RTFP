@@ -65,7 +65,6 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         mpv.setOptionString("vd-lavc-skipidct", "all")
         
         // GPU optimizations
-        mpv.setOptionString("vd-lavc-dr", "yes")
         mpv.setOptionString("opengl-pbo", "yes")
         mpv.setOptionString("opengl-early-flush", "yes")
         
