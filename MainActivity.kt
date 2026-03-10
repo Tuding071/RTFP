@@ -9,15 +9,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
@@ -49,13 +48,22 @@ class MainActivity : ComponentActivity() {
         
         setContent {
             MaterialTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = Color.DarkGray.copy(alpha = 0.9f) // Slightly softer dark gray
+                // Simple background color - Dark Gray
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.DarkGray)
                 ) {
                     if (videoPath == null) {
-                        // Show splash/instruction screen when no video is playing
-                        SplashContent()
+                        // Centered text instruction
+                        Text(
+                            text = "RTFP\nReal-Time Frame Player\n\nUse any file manager to play a video",
+                            modifier = Modifier.align(Alignment.Center),
+                            color = Color.White,
+                            fontSize = 20.sp,
+                            fontFamily = FontFamily.Default,
+                            lineHeight = 28.sp
+                        )
                     } else {
                         PlayerScreen(
                             videoPath = videoPath,
@@ -66,48 +74,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-        }
-    }
-    
-    @Composable
-    private fun SplashContent() {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            // App name - large and bold
-            Text(
-                text = "RTFP",
-                fontSize = 72.sp,
-                fontWeight = FontWeight.ExtraBold,
-                fontFamily = FontFamily.Default,
-                color = Color.White
-            )
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            // Full app name
-            Text(
-                text = "Real-Time Frame Player",
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Medium,
-                fontFamily = FontFamily.Default,
-                color = Color.White.copy(alpha = 0.9f)
-            )
-            
-            Spacer(modifier = Modifier.height(48.dp))
-            
-            // Instructions
-            Text(
-                text = "Open a video file using any file manager\nto start playback",
-                fontSize = 16.sp,
-                fontFamily = FontFamily.Default,
-                color = Color.White.copy(alpha = 0.7f),
-                lineHeight = 24.sp
-            )
         }
     }
     
