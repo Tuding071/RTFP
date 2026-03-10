@@ -43,11 +43,14 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
     }
 
     override fun postInitOptions() {
-        // Performance
+        // Normal playback settings (untimed OFF, video-sync ON)
         mpv.setOptionString("vd-lavc-threads", "8")
         mpv.setOptionString("demuxer-lavf-threads", "8")
         mpv.setOptionString("cache-initial", "0.5")
-        mpv.setOptionString("untimed", "yes")
+        
+        // Start with normal mode (untimed off, display-resample on)
+        mpv.setOptionString("untimed", "no")
+        mpv.setOptionString("video-sync", "display-resample")
         
         // Seeking
         mpv.setOptionString("hr-seek", "yes")
@@ -62,7 +65,7 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         // GPU
         mpv.setOptionString("gpu-dumb-mode", "yes")
         mpv.setOptionString("opengl-pbo", "yes")
-        mpv.setOptionString("opengl-early-flush", "yes")  // Added
+        mpv.setOptionString("opengl-early-flush", "yes")
         
         // Audio
         mpv.setOptionString("audio-channels", "auto")
@@ -372,17 +375,25 @@ fun PlayerOverlay(
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
+        
+        // Store pre-seek state
         seekStartX = startX
         seekStartPosition = mpv.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
+        
+        // Pause video first
+        if (wasPlayingBeforeSeek) {
+            mpv.setPropertyBoolean("pause", true)
+        }
+        
+        // Enable seeking optimizations
+        mpv.setPropertyString("untimed", "yes")
+        mpv.setPropertyString("video-sync", "none")
+        
         isSeeking = true
         showSeekTime = true
         showSeekbar = true
         showVideoInfo = true
-        
-        if (wasPlayingBeforeSeek) {
-            mpv.setPropertyBoolean("pause", true)
-        }
     }
     
     fun startVerticalSwipe(startY: Float) {
@@ -417,12 +428,23 @@ fun PlayerOverlay(
     
     fun endHorizontalSeeking() {
         if (isSeeking) {
-            val currentPos = mpv.getPropertyDouble("time-pos") ?: seekStartPosition
-            performRealTimeSeek(currentPos)
+            // Get final position
+            val finalPos = mpv.getPropertyDouble("time-pos") ?: seekStartPosition
             
-            if (wasPlayingBeforeSeek) {
-                coroutineScope.launch {
-                    delay(100)
+            // Disable seeking optimizations first
+            mpv.setPropertyString("untimed", "no")
+            mpv.setPropertyString("video-sync", "display-resample")
+            
+            coroutineScope.launch {
+                // Small delay for options to apply
+                delay(50)
+                
+                // Final seek to exact position in normal mode
+                mpv.command("seek", finalPos.toString(), "absolute", "exact")
+                
+                // Resume if it was playing before
+                if (wasPlayingBeforeSeek) {
+                    delay(50) // Small delay after seek
                     mpv.setPropertyBoolean("pause", false)
                 }
             }
@@ -528,13 +550,19 @@ fun PlayerOverlay(
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
-            showSeekTime = true
-            showSeekbar = true
-            showVideoInfo = true
             
+            // Pause if playing
             if (wasPlayingBeforeSeek) {
                 mpv.setPropertyBoolean("pause", true)
             }
+            
+            // Enable seeking optimizations
+            mpv.setPropertyString("untimed", "yes")
+            mpv.setPropertyString("video-sync", "none")
+            
+            showSeekTime = true
+            showSeekbar = true
+            showVideoInfo = true
         }
         isDragging = true
         val oldPosition = seekbarPosition
@@ -548,12 +576,28 @@ fun PlayerOverlay(
     
     fun handleDragFinished() {
         isDragging = false
-        if (wasPlayingBeforeSeek) {
-            coroutineScope.launch {
-                delay(100)
+        
+        // Get final position
+        val finalPos = mpv.getPropertyDouble("time-pos") ?: seekbarPosition.toDouble()
+        
+        // Disable seeking optimizations first
+        mpv.setPropertyString("untimed", "no")
+        mpv.setPropertyString("video-sync", "display-resample")
+        
+        coroutineScope.launch {
+            // Small delay for options to apply
+            delay(50)
+            
+            // Final seek to exact position in normal mode
+            mpv.command("seek", finalPos.toString(), "absolute", "exact")
+            
+            // Resume if it was playing before
+            if (wasPlayingBeforeSeek) {
+                delay(50) // Small delay after seek
                 mpv.setPropertyBoolean("pause", false)
             }
         }
+        
         isSeeking = false
         showSeekTime = false
         wasPlayingBeforeSeek = false
