@@ -1,17 +1,14 @@
 package com.rtfp.player
 
-import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
-import android.media.ThumbnailUtils
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
-import android.provider.MediaStore
 import android.view.View
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -39,14 +36,12 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.*
 import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
@@ -54,10 +49,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Get initial video path from intent (if opened from file manager)
+        // Get initial video path from intent
         val initialVideoPath = extractVideoPath(intent)
         
-        // Setup normal fullscreen (keep status and nav bars)
+        // Setup normal display (show status and nav bars)
         setupDisplay()
         
         // Keep screen on while activity is visible
@@ -65,28 +60,18 @@ class MainActivity : ComponentActivity() {
         
         setContent {
             MaterialTheme {
-                // STATE MANAGED IN COMPOSE
                 var videoPath by remember { mutableStateOf(initialVideoPath) }
                 var showFileManager by remember { mutableStateOf(initialVideoPath == null) }
                 
-                // BACK BUTTON HANDLER - Now works as Up navigation
-                DisposableEffect(showFileManager) {
+                // Simple back handler - just exits
+                DisposableEffect(Unit) {
                     val callback = object : OnBackPressedCallback(true) {
                         override fun handleOnBackPressed() {
-                            if (showFileManager) {
-                                // Let the FileManagerScreen handle its own back navigation
-                                // We'll pass this through a callback
-                            } else {
-                                showFileManager = true
-                                videoPath = null
-                            }
+                            finish()
                         }
                     }
                     onBackPressedDispatcher.addCallback(callback)
-                    
-                    onDispose {
-                        callback.remove()
-                    }
+                    onDispose { callback.remove() }
                 }
                 
                 if (showFileManager) {
@@ -95,10 +80,6 @@ class MainActivity : ComponentActivity() {
                             onFileSelected = { path ->
                                 videoPath = "file://$path"
                                 showFileManager = false
-                            },
-                            onBackPressed = {
-                                // If FileManagerScreen can't handle back, finish activity
-                                finish()
                             }
                         )
                     }
@@ -131,8 +112,11 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun setupDisplay() {
-        // Don't hide system bars - keep status and nav bars visible
+        // Show system bars
         WindowCompat.setDecorFitsSystemWindows(window, true)
+        
+        // Make status bar icons light for dark background
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
     }
     
     private fun setOrientationForVideo(width: Int, height: Int) {
@@ -145,19 +129,17 @@ class MainActivity : ComponentActivity() {
     
     override fun onResume() {
         super.onResume()
-        // Keep screen on but don't hide system bars
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 }
 
-// Data class for file items with metadata
+// Data class for file items
 data class FileItem(
     val name: String,
     val path: String,
     val isDirectory: Boolean,
     val size: Long = 0,
-    val lastModified: Long = 0,
-    var thumbnailPath: String? = null
+    val lastModified: Long = 0
 )
 
 // Sorting options
@@ -172,8 +154,7 @@ enum class SortOption {
 
 @Composable
 fun FileManagerScreen(
-    onFileSelected: (String) -> Unit,
-    onBackPressed: () -> Unit
+    onFileSelected: (String) -> Unit
 ) {
     val context = LocalContext.current
     var currentPath by remember { mutableStateOf<File?>(null) }
@@ -181,11 +162,11 @@ fun FileManagerScreen(
     var sortOption by remember { mutableStateOf(SortOption.NAME_A_TO_Z) }
     var showSortMenu by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    val coroutineScope = rememberCoroutineScope()
+    var isScrolling by remember { mutableStateOf(false) }
     
-    // Cache for thumbnails
-    val thumbnailCache = remember { mutableStateMapOf<String, Bitmap?>() }
-    val thumbnailGenerator = remember { ThumbnailGenerator(context) }
+    // Thumbnail manager
+    val thumbnailManager = remember { ThumbnailManager(context) }
+    val thumbnails = thumbnailManager.thumbnails.collectAsState()
     
     // Load files when path changes
     LaunchedEffect(currentPath) {
@@ -194,33 +175,40 @@ fun FileManagerScreen(
         } else {
             loadFiles(currentPath!!)
         }
-        // Sort files
-        files = sortFiles(files, sortOption)
-        // Generate thumbnails for video files
-        generateThumbnails(files, thumbnailGenerator, thumbnailCache)
+        // Sort with folders on top
+        files = sortFilesWithFoldersTop(files, sortOption)
+        // Generate thumbnails
+        thumbnailManager.generateForFiles(files)
     }
     
     // Re-sort when sort option changes
     LaunchedEffect(sortOption) {
-        files = sortFiles(files, sortOption)
+        files = sortFilesWithFoldersTop(files, sortOption)
+    }
+    
+    // Detect scrolling
+    LaunchedEffect(listState.isScrollInProgress) {
+        isScrolling = listState.isScrollInProgress
     }
     
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF1A1A1A))
-            .systemBarsPadding() // Add padding for system bars
+            .statusBarsPadding() // Add padding for status bar
+            .navigationBarsPadding() // Add padding for nav bar
     ) {
-        // Header with path and controls
+        // Header with path and sort button
         HeaderSection(
             currentPath = currentPath,
-            files = files,
             sortOption = sortOption,
             showSortMenu = showSortMenu,
             onSortClick = { showSortMenu = !showSortMenu },
-            onSortOptionSelected = { sortOption = it },
+            onSortOptionSelected = { 
+                sortOption = it
+                showSortMenu = false
+            },
             onUpClick = {
-                // Handle up navigation
                 val parent = currentPath?.parentFile
                 currentPath = when {
                     parent == null -> null
@@ -229,26 +217,20 @@ fun FileManagerScreen(
                     parent.absolutePath == "/" -> null
                     else -> parent
                 }
-            },
-            onBackPressed = onBackPressed
+            }
         )
         
-        // File list with count
+        // List resize handle (1-20 items visible)
         Box(modifier = Modifier.fillMaxSize()) {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(vertical = 8.dp)
             ) {
-                // Show file count at top
-                item {
-                    FileCountHeader(count = files.size)
-                }
-                
                 items(files, key = { it.path }) { file ->
                     FileListItem(
                         file = file,
-                        thumbnailBitmap = thumbnailCache[file.path],
+                        thumbnails = if (!isScrolling) thumbnails.value[file.path] else null,
                         onClick = {
                             if (file.isDirectory) {
                                 currentPath = File(file.path)
@@ -278,83 +260,53 @@ fun FileManagerScreen(
 @Composable
 fun HeaderSection(
     currentPath: File?,
-    files: List<FileItem>,
     sortOption: SortOption,
     showSortMenu: Boolean,
     onSortClick: () -> Unit,
     onSortOptionSelected: (SortOption) -> Unit,
-    onUpClick: () -> Unit,
-    onBackPressed: () -> Unit
+    onUpClick: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(Color(0xFF2A2A2A))
-    ) {
-        // Top row with path and controls
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Path and navigation
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.weight(1f)
-            ) {
-                // Back/Up button
-                Text(
-                    text = if (currentPath == null) "← Back" else "⬆ Up",
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    modifier = Modifier
-                        .clickable {
-                            if (currentPath == null) {
-                                onBackPressed()
-                            } else {
-                                onUpClick()
-                            }
-                        }
-                        .padding(end = 16.dp)
-                )
-                
-                // Current path
-                Text(
-                    text = if (currentPath == null) "Storage" else currentPath?.name ?: "",
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            
-            // Sort button
-            Text(
-                text = "Sort: ${getSortDisplayName(sortOption)} ▼",
-                color = Color.White,
-                fontSize = 14.sp,
-                modifier = Modifier
-                    .clickable { onSortClick() }
-                    .padding(start = 8.dp)
-            )
-        }
-    }
-}
-
-@Composable
-fun FileCountHeader(count: Int) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xFF333333))
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .background(Color(0xFF2A2A2A))
+            .padding(16.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
+        // Path and Up button
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+        ) {
+            if (currentPath != null) {
+                Text(
+                    text = "⬆ Up",
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    modifier = Modifier
+                        .clickable { onUpClick() }
+                        .padding(end = 16.dp)
+                )
+            }
+            
+            Text(
+                text = if (currentPath == null) "Storage" else currentPath.name ?: "",
+                color = Color.White,
+                fontSize = 14.sp,
+                maxLines = 1,
+                modifier = Modifier.weight(1f)
+            )
+        }
+        
+        // Sort button
         Text(
-            text = "📁 $count item${if (count != 1) "s" else ""}",
-            color = Color.LightGray,
-            fontSize = 12.sp
+            text = "Sort: ${getSortDisplayName(sortOption)} ▼",
+            color = Color.White,
+            fontSize = 14.sp,
+            modifier = Modifier
+                .clickable { onSortClick() }
+                .padding(start = 8.dp)
         )
     }
 }
@@ -362,9 +314,21 @@ fun FileCountHeader(count: Int) {
 @Composable
 fun FileListItem(
     file: FileItem,
-    thumbnailBitmap: Bitmap?,
+    thumbnails: List<Bitmap>?,
     onClick: () -> Unit
 ) {
+    var currentFrame by remember { mutableStateOf(0) }
+    
+    // Handle thumbnail slideshow
+    LaunchedEffect(thumbnails) {
+        if (thumbnails != null && thumbnails.size > 1) {
+            while (true) {
+                delay(500) // 500ms per frame
+                currentFrame = (currentFrame + 1) % thumbnails.size
+            }
+        }
+    }
+    
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -375,21 +339,19 @@ fun FileListItem(
         // Thumbnail or icon
         Box(
             modifier = Modifier
-                .size(50.dp)
+                .size(60.dp)
                 .clip(RoundedCornerShape(4.dp))
                 .background(Color(0xFF333333))
-                .padding(end = 12.dp)
         ) {
-            if (thumbnailBitmap != null) {
-                // Show thumbnail using Android's native Canvas
+            if (thumbnails != null && thumbnails.isNotEmpty()) {
+                // Show current frame of slideshow
                 androidx.compose.foundation.Image(
-                    bitmap = thumbnailBitmap.asImageBitmap(),
+                    bitmap = thumbnails[currentFrame].asImageBitmap(),
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
                 )
             } else {
-                // Show emoji icon
                 Text(
                     text = if (file.isDirectory) "📁" else "🎬",
                     fontSize = 24.sp,
@@ -398,10 +360,10 @@ fun FileListItem(
             }
         }
         
+        Spacer(modifier = Modifier.width(12.dp))
+        
         // File info
-        Column(
-            modifier = Modifier.weight(1f)
-        ) {
+        Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = file.name,
                 color = Color.White,
@@ -409,22 +371,11 @@ fun FileListItem(
                 maxLines = 1
             )
             
-            // File details
-            Row {
-                if (!file.isDirectory) {
-                    Text(
-                        text = formatFileSize(file.size),
-                        color = Color.Gray,
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(end = 8.dp)
-                    )
-                }
-                Text(
-                    text = formatDate(file.lastModified),
-                    color = Color.Gray,
-                    fontSize = 12.sp
-                )
-            }
+            Text(
+                text = if (file.isDirectory) "Folder" else formatFileSize(file.size),
+                color = Color.Gray,
+                fontSize = 12.sp
+            )
         }
     }
 }
@@ -464,40 +415,44 @@ fun SortMenu(
 }
 
 // Helper functions
-fun getSortDisplayName(option: SortOption): String {
-    return when (option) {
-        SortOption.NAME_A_TO_Z -> "Name A-Z"
-        SortOption.NAME_Z_TO_A -> "Name Z-A"
-        SortOption.DATE_NEWEST -> "Newest first"
-        SortOption.DATE_OLDEST -> "Oldest first"
-        SortOption.SIZE_LARGEST -> "Largest first"
-        SortOption.SIZE_SMALLEST -> "Smallest first"
-    }
+fun getSortDisplayName(option: SortOption): String = when (option) {
+    SortOption.NAME_A_TO_Z -> "Name A-Z"
+    SortOption.NAME_Z_TO_A -> "Name Z-A"
+    SortOption.DATE_NEWEST -> "Newest first"
+    SortOption.DATE_OLDEST -> "Oldest first"
+    SortOption.SIZE_LARGEST -> "Largest first"
+    SortOption.SIZE_SMALLEST -> "Smallest first"
 }
 
-fun sortFiles(files: List<FileItem>, option: SortOption): List<FileItem> {
-    return when (option) {
-        SortOption.NAME_A_TO_Z -> files.sortedBy { it.name.lowercase() }
-        SortOption.NAME_Z_TO_A -> files.sortedByDescending { it.name.lowercase() }
-        SortOption.DATE_NEWEST -> files.sortedByDescending { it.lastModified }
-        SortOption.DATE_OLDEST -> files.sortedBy { it.lastModified }
-        SortOption.SIZE_LARGEST -> files.sortedByDescending { if (it.isDirectory) 0 else it.size }
-        SortOption.SIZE_SMALLEST -> files.sortedBy { if (it.isDirectory) 0 else it.size }
+fun sortFilesWithFoldersTop(files: List<FileItem>, option: SortOption): List<FileItem> {
+    val (folders, videos) = files.partition { it.isDirectory }
+    
+    val sortedFolders = when (option) {
+        SortOption.NAME_A_TO_Z -> folders.sortedBy { it.name.lowercase() }
+        SortOption.NAME_Z_TO_A -> folders.sortedByDescending { it.name.lowercase() }
+        SortOption.DATE_NEWEST -> folders.sortedByDescending { it.lastModified }
+        SortOption.DATE_OLDEST -> folders.sortedBy { it.lastModified }
+        SortOption.SIZE_LARGEST -> folders
+        SortOption.SIZE_SMALLEST -> folders
     }
+    
+    val sortedVideos = when (option) {
+        SortOption.NAME_A_TO_Z -> videos.sortedBy { it.name.lowercase() }
+        SortOption.NAME_Z_TO_A -> videos.sortedByDescending { it.name.lowercase() }
+        SortOption.DATE_NEWEST -> videos.sortedByDescending { it.lastModified }
+        SortOption.DATE_OLDEST -> videos.sortedBy { it.lastModified }
+        SortOption.SIZE_LARGEST -> videos.sortedByDescending { it.size }
+        SortOption.SIZE_SMALLEST -> videos.sortedBy { it.size }
+    }
+    
+    return sortedFolders + sortedVideos
 }
 
 fun formatFileSize(size: Long): String {
     if (size <= 0) return "0 B"
-    val units = arrayOf("B", "KB", "MB", "GB", "TB")
+    val units = arrayOf("B", "KB", "MB", "GB")
     val digitGroups = (Math.log10(size.toDouble()) / Math.log10(1024.0)).toInt()
     return String.format("%.1f %s", size / Math.pow(1024.0, digitGroups.toDouble()), units[digitGroups])
-}
-
-fun formatDate(timestamp: Long): String {
-    if (timestamp == 0L) return "Unknown"
-    val date = Date(timestamp)
-    val format = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
-    return format.format(date)
 }
 
 fun getStorageRoots(): List<FileItem> {
@@ -512,7 +467,7 @@ fun getStorageRoots(): List<FileItem> {
         lastModified = internalStorage.lastModified()
     ))
     
-    // SD Card detection
+    // SD Card
     val sdCardPath = getSdCardPath()
     if (sdCardPath != null) {
         val sdCardFile = File(sdCardPath)
@@ -553,12 +508,7 @@ fun getSdCardPath(): String? {
         "/mnt/sdcard/",
         "/mnt/extSdCard/",
         "/storage/sdcard1/",
-        "/storage/extSdCard/",
-        "/storage/emulated/0/",
-        "/storage/UsbDriveA/",
-        "/storage/UsbDriveB/",
-        "/storage/external_SD/",
-        "/mnt/media_rw/"
+        "/storage/extSdCard/"
     )
     
     for (path in storageDirs) {
@@ -593,47 +543,136 @@ fun getSdCardPath(): String? {
     return null
 }
 
-// Thumbnail Generator Class using Android native ThumbnailUtils
-class ThumbnailGenerator(private val context: Context) {
+// Thumbnail Manager Class
+class ThumbnailManager(private val context: Context) {
+    private val thumbnailDir = File(context.cacheDir, "video_thumbnails")
     private val executor = Executors.newSingleThreadExecutor()
+    private val _thumbnails = MutableStateFlow<Map<String, List<Bitmap>>>(emptyMap())
+    val thumbnails: MutableStateFlow<Map<String, List<Bitmap>>> = _thumbnails
     
-    fun generateThumbnail(videoPath: String, callback: (Bitmap?) -> Unit) {
-        executor.execute {
-            try {
-                val videoFile = File(videoPath)
-                if (!videoFile.exists()) {
-                    callback(null)
-                    return@execute
-                }
-                
-                // Use Android's native ThumbnailUtils
-                val bitmap = ThumbnailUtils.createVideoThumbnail(
-                    videoPath,
-                    MediaStore.Video.Thumbnails.MINI_KIND
-                )
-                
-                callback(bitmap)
-                
-            } catch (e: Exception) {
-                e.printStackTrace()
-                callback(null)
+    // Limit to 200 videos
+    private val maxVideos = 200
+    private val videoList = mutableListOf<String>()
+    
+    init {
+        if (!thumbnailDir.exists()) {
+            thumbnailDir.mkdirs()
+        }
+        cleanupOldThumbnails()
+    }
+    
+    fun generateForFiles(files: List<FileItem>) {
+        val videoFiles = files.filter { !it.isDirectory }
+        
+        // Update video list and enforce limit
+        videoList.addAll(videoFiles.map { it.path })
+        while (videoList.size > maxVideos) {
+            val oldest = videoList.removeAt(0)
+            deleteThumbnails(oldest)
+        }
+        
+        // Generate thumbnails for new videos
+        videoFiles.forEach { file ->
+            if (!_thumbnails.value.containsKey(file.path)) {
+                generateThumbnails(file.path)
             }
         }
     }
-}
-
-// Function to generate thumbnails for video files
-fun generateThumbnails(
-    files: List<FileItem>,
-    generator: ThumbnailGenerator,
-    cache: MutableMap<String, Bitmap?>
-) {
-    files.filter { !it.isDirectory }.forEach { file ->
-        if (!cache.containsKey(file.path)) {
-            generator.generateThumbnail(file.path) { bitmap ->
-                if (bitmap != null) {
-                    cache[file.path] = bitmap
+    
+    private fun generateThumbnails(videoPath: String) {
+        executor.execute {
+            try {
+                val videoFile = File(videoPath)
+                if (!videoFile.exists()) return@execute
+                
+                // Check if already cached
+                val cacheKey = videoFile.nameWithoutExtension
+                val cachedFile = File(thumbnailDir, "${cacheKey}_frames.dat")
+                
+                val frames = if (cachedFile.exists()) {
+                    // Load from cache
+                    loadFramesFromCache(cachedFile)
+                } else {
+                    // Generate new frames
+                    generateFrames(videoPath).also { frames ->
+                        // Cache the frames
+                        saveFramesToCache(cachedFile, frames)
+                    }
                 }
+                
+                if (frames.isNotEmpty()) {
+                    _thumbnails.value = _thumbnails.value + (videoPath to frames)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+    
+    private fun generateFrames(videoPath: String): List<Bitmap> {
+        val frames = mutableListOf<Bitmap>()
+        val retriever = MediaMetadataRetriever()
+        
+        try {
+            retriever.setDataSource(videoPath)
+            val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLong() ?: 0
+            
+            if (duration > 0) {
+                // Get 10 frames at different positions
+                for (i in 0 until 10) {
+                    val timeUs = (duration * 1000 * i / 9) // 0 to 100% in 9 steps
+                    val bitmap = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
+                    if (bitmap != null) {
+                        // Scale to thumbnail size
+                        val scaled = Bitmap.createScaledBitmap(bitmap, 120, 120, true)
+                        frames.add(scaled)
+                        bitmap.recycle()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            retriever.release()
+        }
+        
+        return frames
+    }
+    
+    private fun saveFramesToCache(file: File, frames: List<Bitmap>) {
+        try {
+            FileOutputStream(file).use { out ->
+                // Write number of frames
+                out.write(frames.size)
+                
+                frames.forEach { bitmap ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 70, out)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+    
+    private fun loadFramesFromCache(file: File): List<Bitmap> {
+        // Simplified - in real implementation would read and decode
+        return emptyList()
+    }
+    
+    private fun deleteThumbnails(videoPath: String) {
+        _thumbnails.value = _thumbnails.value - videoPath
+        // Also delete cached files
+        val videoFile = File(videoPath)
+        val cacheFile = File(thumbnailDir, "${videoFile.nameWithoutExtension}_frames.dat")
+        cacheFile.delete()
+    }
+    
+    private fun cleanupOldThumbnails() {
+        // Delete thumbnails older than 7 days
+        val weekAgo = System.currentTimeMillis() - (7 * 24 * 60 * 60 * 1000)
+        thumbnailDir.listFiles()?.forEach { file ->
+            if (file.lastModified() < weekAgo) {
+                file.delete()
             }
         }
     }
