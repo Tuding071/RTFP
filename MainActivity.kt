@@ -54,6 +54,22 @@ class MainActivity : ComponentActivity() {
                 var videoPath by remember { mutableStateOf(initialVideoPath) }
                 var showFileManager by remember { mutableStateOf(initialVideoPath == null) }
                 
+                // Handle system bars based on screen
+                LaunchedEffect(showFileManager) {
+                    if (showFileManager) {
+                        // Show system bars for file manager
+                        WindowCompat.setDecorFitsSystemWindows(window, true)
+                        val controller = WindowInsetsControllerCompat(window, window.decorView)
+                        controller.show(WindowInsetsCompat.Type.systemBars())
+                    } else {
+                        // Hide system bars for player
+                        WindowCompat.setDecorFitsSystemWindows(window, false)
+                        val controller = WindowInsetsControllerCompat(window, window.decorView)
+                        controller.hide(WindowInsetsCompat.Type.systemBars())
+                        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    }
+                }
+                
                 // Back handler
                 DisposableEffect(showFileManager) {
                     val callback = object : OnBackPressedCallback(true) {
@@ -71,8 +87,6 @@ class MainActivity : ComponentActivity() {
                 }
                 
                 if (showFileManager) {
-                    // Show status/nav bars in file manager
-                    ShowSystemBars()
                     key("file-manager") {
                         FileManagerScreen(
                             onFileSelected = { path ->
@@ -82,8 +96,6 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 } else {
-                    // Hide status/nav bars in player
-                    HideSystemBars()
                     key(videoPath) {
                         PlayerScreen(
                             videoPath = videoPath,
@@ -123,22 +135,6 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
-}
-
-@Composable
-fun ShowSystemBars() {
-    // Show system bars for file manager
-    WindowCompat.setDecorFitsSystemWindows(LocalContext.current as MainActivity, true)
-}
-
-@Composable
-fun HideSystemBars() {
-    // Hide system bars for player
-    val window = (LocalContext.current as MainActivity).window
-    WindowCompat.setDecorFitsSystemWindows(window, false)
-    val controller = WindowInsetsControllerCompat(window, window.decorView)
-    controller.hide(WindowInsetsCompat.Type.systemBars())
-    controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
 }
 
 // Data class for file items
@@ -424,7 +420,7 @@ fun VideoPreviewPopup(
             .fillMaxSize()
             .background(Color(0xCC000000))
     ) {
-        // Preview container - only this area is clickable for closing
+        // Preview container - only click on background doesn't close
         Box(
             modifier = Modifier
                 .fillMaxWidth(0.9f)
