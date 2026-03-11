@@ -62,7 +62,7 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         // GPU
         mpv.setOptionString("gpu-dumb-mode", "yes")
         mpv.setOptionString("opengl-pbo", "yes")
-        mpv.setOptionString("opengl-early-flush", "yes")  // Added
+        mpv.setOptionString("opengl-early-flush", "yes")
         
         // Audio
         mpv.setOptionString("audio-channels", "auto")
@@ -199,6 +199,10 @@ fun PlayerOverlay(
     var isSeekInProgress by remember { mutableStateOf(false) }
     val seekThrottleMs = 16L
     
+    // NEW: Throttling for horizontal swipe
+    var lastSeekTime by remember { mutableStateOf(0L) }
+    var lastHorizontalUpdateTime by remember { mutableStateOf(0L) }
+    
     var touchStartTime by remember { mutableStateOf(0L) }
     var touchStartX by remember { mutableStateOf(0f) }
     var touchStartY by remember { mutableStateOf(0f) }
@@ -282,7 +286,7 @@ fun PlayerOverlay(
         }
     }
     
-    // For HORIZONTAL SWIPE - smooth seeking (frame-by-frame, no rounding)
+    // For HORIZONTAL SWIPE - smooth seeking (frame-by-frame, no rounding) with 50ms throttle
     fun performSmoothSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         isSeekInProgress = true
@@ -391,6 +395,10 @@ fun PlayerOverlay(
         if (wasPlayingBeforeSeek) {
             mpv.setPropertyBoolean("pause", true)
         }
+        
+        // Reset throttling timers
+        lastSeekTime = 0L
+        lastHorizontalUpdateTime = 0L
     }
     
     fun startVerticalSwipe(startY: Float) {
@@ -419,9 +427,22 @@ fun PlayerOverlay(
         
         seekDirection = if (deltaX > 0) "+" else "-"
         seekTargetTime = formatTimeSimple(clampedPosition)
-        currentTime = formatTimeSimple(clampedPosition)
-        // Use smooth seek for horizontal swipe
-        performSmoothSeek(clampedPosition)
+        
+        val now = System.currentTimeMillis()
+        
+        // Update UI every 16ms (60fps) for smooth visual feedback
+        if (now - lastHorizontalUpdateTime > 16) {
+            currentTime = formatTimeSimple(clampedPosition)
+            // UPDATE SEEKBAR POSITION IN REAL-TIME
+            seekbarPosition = clampedPosition.toFloat()
+            lastHorizontalUpdateTime = now
+        }
+        
+        // Throttle MPV seeks to every 50ms (20fps) to balance performance and smoothness
+        if (now - lastSeekTime > 50) {
+            performSmoothSeek(clampedPosition)
+            lastSeekTime = now
+        }
     }
     
     fun endHorizontalSeeking() {
