@@ -282,10 +282,23 @@ fun PlayerOverlay(
         }
     }
     
-    fun performRealTimeSeek(targetPosition: Double) {
+    // For HORIZONTAL SWIPE - smooth seeking (frame-by-frame, no rounding)
+    fun performSmoothSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         isSeekInProgress = true
-        // FIXED: Round to nearest second for 1-second increments
+        // NO ROUNDING - smooth for horizontal swipe
+        mpv.command("seek", targetPosition.toString(), "absolute", "exact")
+        coroutineScope.launch {
+            delay(seekThrottleMs)
+            isSeekInProgress = false
+        }
+    }
+    
+    // For PROGRESS BAR - 1-second increments
+    fun performStepSeek(targetPosition: Double) {
+        if (isSeekInProgress) return
+        isSeekInProgress = true
+        // Round to nearest second for progress bar
         val roundedPosition = (targetPosition + 0.5).toInt().toDouble()
         mpv.command("seek", roundedPosition.toString(), "absolute", "exact")
         coroutineScope.launch {
@@ -398,7 +411,7 @@ fun PlayerOverlay(
         if (!isSeeking) return
         
         val deltaX = currentX - seekStartX
-        val pixelsPerSecond = 4f / 0.032f
+        val pixelsPerSecond = 3f / 0.0416667f
         val timeDeltaSeconds = deltaX / pixelsPerSecond
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = mpv.getPropertyDouble("duration") ?: 0.0
@@ -407,13 +420,14 @@ fun PlayerOverlay(
         seekDirection = if (deltaX > 0) "+" else "-"
         seekTargetTime = formatTimeSimple(clampedPosition)
         currentTime = formatTimeSimple(clampedPosition)
-        performRealTimeSeek(clampedPosition)
+        // Use smooth seek for horizontal swipe
+        performSmoothSeek(clampedPosition)
     }
     
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = mpv.getPropertyDouble("time-pos") ?: seekStartPosition
-            performRealTimeSeek(currentPos)
+            performSmoothSeek(currentPos)
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -533,7 +547,9 @@ fun PlayerOverlay(
         val targetPosition = newPosition.toDouble()
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
-        performRealTimeSeek(targetPosition)
+        
+        // Use step seek (1-second increments) for progress bar
+        performStepSeek(targetPosition)
     }
     
     fun handleDragFinished() {
@@ -654,7 +670,6 @@ fun PlayerOverlay(
                     }
                     Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
                         if (isDurationValid) {
-                            // FIXED: Using SimpleDraggableProgressBar with 1-second increments
                             SimpleDraggableProgressBar(
                                 position = seekbarPosition,
                                 duration = seekbarDuration,
@@ -812,7 +827,7 @@ fun SimpleDraggableProgressBar(
                             val newPosition = (savedPositionAtTouch + deltaPosition)
                                 .coerceIn(0f, safeDuration)
                             
-                            // FIXED: Round to nearest second for 1-second increments
+                            // Round to nearest second for 1-second increments (PROGRESS BAR ONLY)
                             val roundedPosition = (newPosition + 0.5f).toInt().toFloat()
                             
                             // Update if changed
