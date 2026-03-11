@@ -206,7 +206,6 @@ fun PlayerOverlay(
     var isLongTap by remember { mutableStateOf(false) }
     var isHorizontalSwipe by remember { mutableStateOf(false) }
     var isVerticalSwipe by remember { mutableStateOf(false) }
-    var longTapJob by remember { mutableStateOf<Job?>(null) }
     
     val longTapThreshold = 300L
     val horizontalSwipeThreshold = 30f
@@ -219,18 +218,26 @@ fun PlayerOverlay(
     var fileName by remember { mutableStateOf("RTFP") }
     
     var userInteracting by remember { mutableStateOf(false) }
-    var hideSeekbarJob by remember { mutableStateOf<Job?>(null) }
     
     var showPlaybackFeedback by remember { mutableStateOf(false) }
     var playbackFeedbackText by remember { mutableStateOf("") }
-    var playbackFeedbackJob by remember { mutableStateOf<Job?>(null) }
     
     var showQuickSeekFeedback by remember { mutableStateOf(false) }
     var quickSeekFeedbackText by remember { mutableStateOf("") }
-    var quickSeekFeedbackJob by remember { mutableStateOf<Job?>(null) }
     
     // Track if duration is valid for seekbar
     var isDurationValid by remember { mutableStateOf(false) }
+    
+    // FIXED: Auto-hide seekbar with proper lifecycle - no more job leaks
+    LaunchedEffect(showSeekbar, userInteracting) {
+        if (showSeekbar && !userInteracting) {
+            delay(4000)
+            if (!userInteracting) {
+                showSeekbar = false
+                showVideoInfo = false
+            }
+        }
+    }
     
     // Wait for valid duration before starting
     LaunchedEffect(Unit) {
@@ -252,19 +259,8 @@ fun PlayerOverlay(
     }
     
     // Utility functions
-    fun scheduleSeekbarHide() {
-        if (userInteracting) return
-        hideSeekbarJob?.cancel()
-        hideSeekbarJob = coroutineScope.launch {
-            delay(4000)
-            showSeekbar = false
-            showVideoInfo = false
-        }
-    }
-    
     fun cancelAutoHide() {
         userInteracting = true
-        hideSeekbarJob?.cancel()
         coroutineScope.launch {
             delay(100)
             userInteracting = false
@@ -274,14 +270,13 @@ fun PlayerOverlay(
     fun showSeekbarWithTimeout() {
         showSeekbar = true
         showVideoInfo = true
-        scheduleSeekbarHide()
+        // No need to schedule manually - LaunchedEffect handles it
     }
     
     fun showPlaybackFeedback(text: String) {
-        playbackFeedbackJob?.cancel()
         showPlaybackFeedback = true
         playbackFeedbackText = text
-        playbackFeedbackJob = coroutineScope.launch {
+        coroutineScope.launch {
             delay(1000)
             showPlaybackFeedback = false
         }
@@ -290,7 +285,9 @@ fun PlayerOverlay(
     fun performRealTimeSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         isSeekInProgress = true
-        mpv.command("seek", targetPosition.toString(), "absolute", "exact")
+        // FIXED: Round to nearest second for 1-second increments
+        val roundedPosition = (targetPosition + 0.5).toInt().toDouble()
+        mpv.command("seek", roundedPosition.toString(), "absolute", "exact")
         coroutineScope.launch {
             delay(seekThrottleMs)
             isSeekInProgress = false
@@ -307,8 +304,7 @@ fun PlayerOverlay(
         
         quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
         showQuickSeekFeedback = true
-        quickSeekFeedbackJob?.cancel()
-        quickSeekFeedbackJob = coroutineScope.launch {
+        coroutineScope.launch {
             delay(1000)
             showQuickSeekFeedback = false
         }
@@ -341,8 +337,7 @@ fun PlayerOverlay(
     fun startLongTapDetection() {
         isTouching = true
         touchStartTime = System.currentTimeMillis()
-        longTapJob?.cancel()
-        longTapJob = coroutineScope.launch {
+        coroutineScope.launch {
             delay(longTapThreshold)
             if (isTouching && !isHorizontalSwipe && !isVerticalSwipe) {
                 isLongTap = true
@@ -433,19 +428,16 @@ fun PlayerOverlay(
             seekStartPosition = 0.0
             wasPlayingBeforeSeek = false
             seekDirection = ""
-            scheduleSeekbarHide()
         }
     }
     
     fun endVerticalSwipe() {
         isVerticalSwipe = false
-        scheduleSeekbarHide()
     }
     
     fun endTouch() {
         val touchDuration = System.currentTimeMillis() - touchStartTime
         isTouching = false
-        longTapJob?.cancel()
         
         if (isLongTap) {
             isLongTap = false
@@ -482,8 +474,6 @@ fun PlayerOverlay(
         
         showVideoInfo = true
         showSeekbar = true
-        delay(4000)
-        scheduleSeekbarHide()
     }
     
     // Speed control backup
@@ -558,7 +548,6 @@ fun PlayerOverlay(
         showSeekTime = false
         wasPlayingBeforeSeek = false
         seekDirection = ""
-        scheduleSeekbarHide()
     }
     
     val videoInfoTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
@@ -665,6 +654,7 @@ fun PlayerOverlay(
                     }
                     Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
                         if (isDurationValid) {
+                            // FIXED: Using SimpleDraggableProgressBar with 1-second increments
                             SimpleDraggableProgressBar(
                                 position = seekbarPosition,
                                 duration = seekbarDuration,
@@ -822,9 +812,12 @@ fun SimpleDraggableProgressBar(
                             val newPosition = (savedPositionAtTouch + deltaPosition)
                                 .coerceIn(0f, safeDuration)
                             
+                            // FIXED: Round to nearest second for 1-second increments
+                            val roundedPosition = (newPosition + 0.5f).toInt().toFloat()
+                            
                             // Update if changed
-                            if (abs(newPosition - safePosition) > 0.1f) {
-                                onValueChange(newPosition)
+                            if (abs(roundedPosition - safePosition) > 0.1f) {
+                                onValueChange(roundedPosition)
                             }
                         },
                         onDragEnd = {
