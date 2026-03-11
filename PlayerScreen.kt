@@ -197,7 +197,7 @@ fun PlayerOverlay(
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     var seekDirection by remember { mutableStateOf("") }
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 16.66666666666L
+    val seekThrottleMs = 20L
     
     // NEW: Throttling for horizontal swipe
     var lastSeekTime by remember { mutableStateOf(0L) }
@@ -419,7 +419,7 @@ fun PlayerOverlay(
         if (!isSeeking) return
         
         val deltaX = currentX - seekStartX
-        val pixelsPerSecond = 3f / 0.0416667f
+        val pixelsPerSecond = 3f / 0.0416f
         val timeDeltaSeconds = deltaX / pixelsPerSecond
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = mpv.getPropertyDouble("duration") ?: 0.0
@@ -431,7 +431,7 @@ fun PlayerOverlay(
         val now = System.currentTimeMillis()
         
         // Update UI every 16ms (60fps) for smooth visual feedback
-        if (now - lastHorizontalUpdateTime > 16.666666666666) {
+        if (now - lastHorizontalUpdateTime > 16) {
             currentTime = formatTimeSimple(clampedPosition)
             // UPDATE SEEKBAR POSITION IN REAL-TIME
             seekbarPosition = clampedPosition.toFloat()
@@ -439,7 +439,7 @@ fun PlayerOverlay(
         }
         
         // Throttle MPV seeks to every 50ms (20fps) to balance performance and smoothness
-        if (now - lastSeekTime > 33.333333333333) {
+        if (now - lastSeekTime > 20) {
             performSmoothSeek(clampedPosition)
             lastSeekTime = now
         }
