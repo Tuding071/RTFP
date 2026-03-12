@@ -36,7 +36,7 @@ import kotlin.math.sign
 class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView(context, attrs) {
     
     override fun initOptions() {
-        mpv.setOptionString("hwdec", "no")
+        mpv.setOptionString("hwdec", "mediacodec")
         mpv.setOptionString("vo", "gpu")
         mpv.setOptionString("profile", "fast")
         mpv.setOptionString("keepaspect", "yes")
