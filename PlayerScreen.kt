@@ -194,7 +194,6 @@ fun PlayerOverlay(
     var seekTargetTime by remember { mutableStateOf("00:00") }
     var showSeekTime by remember { mutableStateOf(false) }
     var isSpeedingUp by remember { mutableStateOf(false) }
-    var showSeekbar by remember { mutableStateOf(true) }
     
     var seekbarPosition by remember { mutableStateOf(0f) }
     var seekbarDuration by remember { mutableStateOf(1f) }
@@ -211,7 +210,6 @@ fun PlayerOverlay(
     // Settings state
     var showSettings by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(PlayerSettings()) }
-    var showSettingsPanel by remember { mutableStateOf(false) }
     
     // Settings input dialog state
     var showSeekThrottleDialog by remember { mutableStateOf(false) }
@@ -238,7 +236,6 @@ fun PlayerOverlay(
     val maxVerticalMovement = 50f
     val maxHorizontalMovement = 50f
     
-    var showVideoInfo by remember { mutableStateOf(true) }
     var fileName by remember { mutableStateOf("RTFP") }
     
     var userInteracting by remember { mutableStateOf(false) }
@@ -246,20 +243,20 @@ fun PlayerOverlay(
     var showPlaybackFeedback by remember { mutableStateOf(false) }
     var playbackFeedbackText by remember { mutableStateOf("") }
     
-    // UI visibility timeout (separate from settings)
+    // UI visibility - starts visible, hides after timeout
     var uiVisible by remember { mutableStateOf(true) }
     
     // Track if duration is valid for seekbar
     var isDurationValid by remember { mutableStateOf(false) }
     
     // Auto-hide UI after 4 seconds of no interaction
-    LaunchedEffect(userInteracting, showSettingsPanel) {
-        if (!showSettingsPanel) {
+    LaunchedEffect(userInteracting, showSettings) {
+        if (!showSettings) {
             if (userInteracting) {
                 uiVisible = true
             } else {
                 delay(4000)
-                if (!userInteracting && !showSettingsPanel) {
+                if (!userInteracting && !showSettings) {
                     uiVisible = false
                 }
             }
@@ -294,6 +291,11 @@ fun PlayerOverlay(
             delay(100)
             userInteracting = false
         }
+    }
+    
+    fun showUI() {
+        uiVisible = true
+        cancelAutoHide()
     }
     
     fun showPlaybackFeedback(text: String) {
@@ -347,20 +349,26 @@ fun PlayerOverlay(
     }
     
     fun handleTap() {
-        val currentPaused = mpv.getPropertyBoolean("pause") ?: false
-        if (currentPaused) {
-            coroutineScope.launch {
-                val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
-                mpv.command("seek", currentPos.toString(), "absolute", "exact")
-                delay(100)
-                mpv.setPropertyBoolean("pause", false)
-            }
-            showPlaybackFeedback("Resume")
+        if (uiVisible) {
+            // If UI is visible, hide it on tap
+            uiVisible = false
         } else {
-            mpv.setPropertyBoolean("pause", true)
-            showPlaybackFeedback("Pause")
+            // If UI is hidden, show it and handle pause/play
+            showUI()
+            val currentPaused = mpv.getPropertyBoolean("pause") ?: false
+            if (currentPaused) {
+                coroutineScope.launch {
+                    val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
+                    mpv.command("seek", currentPos.toString(), "absolute", "exact")
+                    delay(100)
+                    mpv.setPropertyBoolean("pause", false)
+                }
+                showPlaybackFeedback("Resume")
+            } else {
+                mpv.setPropertyBoolean("pause", true)
+                showPlaybackFeedback("Pause")
+            }
         }
-        cancelAutoHide()
     }
     
     fun startLongTapDetection() {
@@ -372,6 +380,7 @@ fun PlayerOverlay(
                 isLongTap = true
                 isSpeedingUp = true
                 mpv.setPropertyDouble("speed", 2.0)
+                showUI()
             }
         }
     }
@@ -395,7 +404,7 @@ fun PlayerOverlay(
     
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
-        cancelAutoHide()
+        showUI()
         seekStartX = startX
         seekStartPosition = mpv.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
@@ -413,7 +422,7 @@ fun PlayerOverlay(
     
     fun startVerticalSeeking(startY: Float) {
         isVerticalSwipe = true
-        cancelAutoHide()
+        showUI()
         seekStartY = startY
         seekStartPosition = mpv.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
@@ -607,7 +616,7 @@ fun PlayerOverlay(
     
     // Progress bar handlers
     fun handleProgressBarDrag(newPosition: Float) {
-        cancelAutoHide()
+        showUI()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
@@ -643,72 +652,52 @@ fun PlayerOverlay(
         seekDirection = ""
     }
     
-    val uiAlpha = if (uiVisible) 1.0f else 0.0f
-    val uiBackgroundAlpha = if (uiVisible) 0.8f else 0.0f
-    
     Box(modifier = modifier.fillMaxSize()) {
-        // TOP UI BAR - Always on top, separate from gestures
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(60.dp)
-                .align(Alignment.TopCenter)
-                .background(Color.Black.copy(alpha = uiBackgroundAlpha * 0.5f))
-                .clickable { 
-                    // This box just captures clicks to show UI
-                    if (!uiVisible) {
-                        uiVisible = true
-                        cancelAutoHide()
-                    }
-                }
-        ) {
-            // Filename (left side)
+        // FILENAME - Top left (only when UI visible)
+        if (uiVisible) {
             Text(
                 text = fileName,
                 style = TextStyle(
-                    color = Color.White.copy(alpha = uiAlpha),
+                    color = Color.White,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Medium
                 ),
                 modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .padding(start = 60.dp)
-                    .background(Color.DarkGray.copy(alpha = uiBackgroundAlpha))
+                    .align(Alignment.TopStart)
+                    .padding(start = 60.dp, top = 20.dp)
+                    .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             )
-            
-            // Settings button (right side)
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 60.dp)
-                    .background(Color.DarkGray.copy(alpha = uiBackgroundAlpha))
-                    .clickable { 
-                        showSettingsPanel = !showSettingsPanel
-                        if (showSettingsPanel) {
-                            uiVisible = true
-                            cancelAutoHide()
-                        }
-                    }
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    text = "Settings",
-                    style = TextStyle(
-                        color = Color.White.copy(alpha = uiAlpha),
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                )
-            }
         }
         
-        // Settings panel - appears below the top bar
-        if (showSettingsPanel && uiVisible) {
+        // SETTINGS BUTTON - Top right (always clickable, even when UI hidden)
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 20.dp, end = 60.dp)
+                .background(if (uiVisible) Color.DarkGray.copy(alpha = 0.8f) else Color.Transparent)
+                .clickable { 
+                    showSettings = !showSettings
+                    showUI()
+                }
+                .padding(horizontal = 16.dp, vertical = 6.dp)
+        ) {
+            Text(
+                text = "Settings",
+                style = TextStyle(
+                    color = if (uiVisible) Color.White else Color.Transparent,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            )
+        }
+        
+        // SETTINGS PANEL - Appears below settings button
+        if (showSettings && uiVisible) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 60.dp)
+                    .align(Alignment.TopEnd)
+                    .padding(top = 60.dp, end = 60.dp)
                     .width(300.dp)
                     .background(Color.DarkGray.copy(alpha = 0.95f))
             ) {
@@ -749,46 +738,41 @@ fun PlayerOverlay(
             }
         }
         
-        // Gesture area (main player controls)
+        // GESTURE AREA - Full screen for touch handling
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInteropFilter { event ->
-                    // Only process gestures if UI is visible or we're in a gesture
-                    if (uiVisible || isTouching || isHorizontalSwipe || isVerticalSwipe) {
-                        when (event.action) {
-                            MotionEvent.ACTION_DOWN -> {
-                                touchStartX = event.x
-                                touchStartY = event.y
-                                startLongTapDetection()
-                                true
-                            }
-                            MotionEvent.ACTION_MOVE -> {
-                                if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
-                                    when (checkForSwipeDirection(event.x, event.y)) {
-                                        "horizontal" -> startHorizontalSeeking(event.x)
-                                        "vertical" -> startVerticalSeeking(event.y)
-                                    }
-                                } else if (isHorizontalSwipe) {
-                                    handleHorizontalSeeking(event.x)
-                                } else if (isVerticalSwipe) {
-                                    handleVerticalSeeking(event.y)
-                                }
-                                true
-                            }
-                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                endTouch()
-                                true
-                            }
-                            else -> false
+                    when (event.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            touchStartX = event.x
+                            touchStartY = event.y
+                            startLongTapDetection()
+                            true
                         }
-                    } else {
-                        false
+                        MotionEvent.ACTION_MOVE -> {
+                            if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
+                                when (checkForSwipeDirection(event.x, event.y)) {
+                                    "horizontal" -> startHorizontalSeeking(event.x)
+                                    "vertical" -> startVerticalSeeking(event.y)
+                                }
+                            } else if (isHorizontalSwipe) {
+                                handleHorizontalSeeking(event.x)
+                            } else if (isVerticalSwipe) {
+                                handleVerticalSeeking(event.y)
+                            }
+                            true
+                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            endTouch()
+                            true
+                        }
+                        else -> false
                     }
                 }
         )
         
-        // Seekbar (bottom UI element)
+        // SEEKBAR - Bottom (only when UI visible)
         if (uiVisible) {
             Box(
                 modifier = Modifier
@@ -854,7 +838,7 @@ fun PlayerOverlay(
             }
         }
         
-        // Feedback overlays (always visible when active)
+        // FEEDBACK OVERLAYS - Always visible when active
         Box(modifier = Modifier.align(Alignment.Center)) {
             when {
                 isSpeedingUp -> Text(
@@ -875,7 +859,7 @@ fun PlayerOverlay(
             }
         }
         
-        // Settings input dialogs
+        // SETTINGS INPUT DIALOGS
         if (showSeekThrottleDialog) {
             SettingsInputDialog(
                 title = "Seek Throttle (ms)",
