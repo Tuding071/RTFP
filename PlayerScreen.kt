@@ -36,17 +36,10 @@ import kotlin.math.sign
 class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView(context, attrs) {
     
     override fun initOptions() {
-        mpv.setOptionString("hwdec", "mediacodec")
+        mpv.setOptionString("hwdec", "no")
         mpv.setOptionString("vo", "gpu")
         mpv.setOptionString("profile", "fast")
         mpv.setOptionString("keepaspect", "yes")
-        
-        // Downscaling to 480p
-        mpv.setOptionString("sws-scaler", "fast-bilinear")
-        mpv.setOptionString("dscale", "bilinear")
-        mpv.setOptionString("scale", "bilinear")
-        mpv.setOptionString("cscale", "bilinear")
-        mpv.setOptionString("video-output-levels", "limited")
     }
 
     override fun postInitOptions() {
@@ -78,16 +71,6 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         // Video
         mpv.setOptionString("deband", "no")
         mpv.setOptionString("video-aspect-override", "no")
-        
-        // Force downscale to 480p for maximum performance
-        mpv.setOptionString("video-output-params", "w=852:h=480")
-        mpv.setOptionString("sws-scaler", "fast-bilinear")
-        mpv.setOptionString("scale", "bilinear")
-        mpv.setOptionString("dither", "no")
-        mpv.setOptionString("correct-downscaling", "no")
-        mpv.setOptionString("linear-downscaling", "no")
-        mpv.setOptionString("scaler-lut-size", "4")
-        mpv.setOptionString("scaler-resizes-only", "yes")
     }
 
     override fun observeProperties() {}
@@ -436,7 +419,7 @@ fun PlayerOverlay(
         if (!isSeeking) return
         
         val deltaX = currentX - seekStartX
-        val pixelsPerSecond = 3f / 0.0416667f
+        val pixelsPerSecond = 3f / 0.016f
         val timeDeltaSeconds = deltaX / pixelsPerSecond
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = mpv.getPropertyDouble("duration") ?: 0.0
@@ -456,7 +439,7 @@ fun PlayerOverlay(
         }
         
         // Throttle MPV seeks to every 50ms (20fps) to balance performance and smoothness
-        if (now - lastSeekTime > 50) {
+        if (now - lastSeekTime > 16) {
             performSmoothSeek(clampedPosition)
             lastSeekTime = now
         }
