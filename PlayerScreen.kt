@@ -250,13 +250,14 @@ fun PlayerOverlay(
     var isDurationValid by remember { mutableStateOf(false) }
     
     // Auto-hide UI after 4 seconds of no interaction
-    LaunchedEffect(userInteracting, showSettings) {
-        if (!showSettings) {
+    LaunchedEffect(userInteracting, showSettings, showSeekThrottleDialog, showHorizontalPixelDialog, showVerticalPixelDialog) {
+        // Don't auto-hide if settings are open or dialogs are showing
+        if (!showSettings && !showSeekThrottleDialog && !showHorizontalPixelDialog && !showVerticalPixelDialog) {
             if (userInteracting) {
                 uiVisible = true
             } else {
                 delay(4000)
-                if (!userInteracting && !showSettings) {
+                if (!userInteracting && !showSettings && !showSeekThrottleDialog && !showHorizontalPixelDialog && !showVerticalPixelDialog) {
                     uiVisible = false
                 }
             }
@@ -349,24 +350,26 @@ fun PlayerOverlay(
     }
     
     fun handleTap() {
-        if (uiVisible) {
-            // If UI is visible, hide it on tap
+        if (uiVisible && !showSettings) {
+            // If UI is visible and settings not open, hide it on tap
             uiVisible = false
         } else {
-            // If UI is hidden, show it and handle pause/play
+            // If UI is hidden or settings are open, show it and handle pause/play
             showUI()
-            val currentPaused = mpv.getPropertyBoolean("pause") ?: false
-            if (currentPaused) {
-                coroutineScope.launch {
-                    val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
-                    mpv.command("seek", currentPos.toString(), "absolute", "exact")
-                    delay(100)
-                    mpv.setPropertyBoolean("pause", false)
+            if (!showSettings) {
+                val currentPaused = mpv.getPropertyBoolean("pause") ?: false
+                if (currentPaused) {
+                    coroutineScope.launch {
+                        val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
+                        mpv.command("seek", currentPos.toString(), "absolute", "exact")
+                        delay(100)
+                        mpv.setPropertyBoolean("pause", false)
+                    }
+                    showPlaybackFeedback("Resume")
+                } else {
+                    mpv.setPropertyBoolean("pause", true)
+                    showPlaybackFeedback("Pause")
                 }
-                showPlaybackFeedback("Resume")
-            } else {
-                mpv.setPropertyBoolean("pause", true)
-                showPlaybackFeedback("Pause")
             }
         }
     }
@@ -554,7 +557,7 @@ fun PlayerOverlay(
         } else if (isVerticalSwipe) {
             endVerticalSeeking()
             isVerticalSwipe = false
-        } else if (touchDuration < 150) {
+        } else if (touchDuration < 150 && !showSettings) {
             handleTap()
         }
         isHorizontalSwipe = false
@@ -721,7 +724,7 @@ fun PlayerOverlay(
         }
         
         // SETTINGS PANEL - Appears below settings button
-        if (showSettings && uiVisible) {
+        if (showSettings) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -731,8 +734,7 @@ fun PlayerOverlay(
                     .pointerInteropFilter { 
                         // Consume all touch events in settings panel
                         when (it.action) {
-                            MotionEvent.ACTION_DOWN -> true
-                            MotionEvent.ACTION_UP, MotionEvent.ACTION_MOVE -> true
+                            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP, MotionEvent.ACTION_MOVE -> true
                             else -> false
                         }
                     }
@@ -748,6 +750,7 @@ fun PlayerOverlay(
                         onClick = {
                             tempInputValue = settings.seekThrottleMs.toString()
                             showSeekThrottleDialog = true
+                            showUI()
                         }
                     )
                     
@@ -758,6 +761,7 @@ fun PlayerOverlay(
                         onClick = {
                             tempInputValue = settings.horizontalPixelsPerMs.toString()
                             showHorizontalPixelDialog = true
+                            showUI()
                         }
                     )
                     
@@ -768,6 +772,7 @@ fun PlayerOverlay(
                         onClick = {
                             tempInputValue = settings.verticalPixelsPerMs.toString()
                             showVerticalPixelDialog = true
+                            showUI()
                         }
                     )
                 }
@@ -901,12 +906,16 @@ fun PlayerOverlay(
             SettingsInputDialog(
                 title = "Seek Throttle (ms)",
                 initialValue = tempInputValue,
-                onDismiss = { showSeekThrottleDialog = false },
+                onDismiss = { 
+                    showSeekThrottleDialog = false
+                    showUI()
+                },
                 onSave = { value ->
                     value.toIntOrNull()?.let {
                         settings = settings.copy(seekThrottleMs = it)
                     }
                     showSeekThrottleDialog = false
+                    showUI()
                 }
             )
         }
@@ -915,12 +924,16 @@ fun PlayerOverlay(
             SettingsInputDialog(
                 title = "Horizontal Sensitivity (px/ms)",
                 initialValue = tempInputValue,
-                onDismiss = { showHorizontalPixelDialog = false },
+                onDismiss = { 
+                    showHorizontalPixelDialog = false
+                    showUI()
+                },
                 onSave = { value ->
                     value.toFloatOrNull()?.let {
                         settings = settings.copy(horizontalPixelsPerMs = it)
                     }
                     showHorizontalPixelDialog = false
+                    showUI()
                 }
             )
         }
@@ -929,12 +942,16 @@ fun PlayerOverlay(
             SettingsInputDialog(
                 title = "Vertical Sensitivity (px/ms)",
                 initialValue = tempInputValue,
-                onDismiss = { showVerticalPixelDialog = false },
+                onDismiss = { 
+                    showVerticalPixelDialog = false
+                    showUI()
+                },
                 onSave = { value ->
                     value.toFloatOrNull()?.let {
                         settings = settings.copy(verticalPixelsPerMs = it)
                     }
                     showVerticalPixelDialog = false
+                    showUI()
                 }
             )
         }
