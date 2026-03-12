@@ -653,43 +653,71 @@ fun PlayerOverlay(
     }
     
     Box(modifier = modifier.fillMaxSize()) {
-        // FILENAME - Top left (only when UI visible)
-        if (uiVisible) {
-            Text(
-                text = fileName,
-                style = TextStyle(
-                    color = Color.White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium
-                ),
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(start = 60.dp, top = 20.dp)
-                    .background(Color.DarkGray.copy(alpha = 0.8f))
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-            )
-        }
-        
-        // SETTINGS BUTTON - Top right (always clickable, even when UI hidden)
+        // TOP CLICKABLE AREA - Settings button and filename (placed FIRST to intercept touches)
         Box(
             modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 20.dp, end = 60.dp)
-                .background(if (uiVisible) Color.DarkGray.copy(alpha = 0.8f) else Color.Transparent)
-                .clickable { 
-                    showSettings = !showSettings
-                    showUI()
+                .fillMaxWidth()
+                .height(100.dp)
+                .align(Alignment.TopCenter)
+                .pointerInteropFilter { 
+                    // Consume all touch events in this area to prevent them from reaching gesture area
+                    when (it.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            // Check if touch is within settings button area
+                            val x = it.x
+                            val y = it.y
+                            val screenWidth = context.resources.displayMetrics.widthPixels
+                            
+                            // Settings button is at top right (approx last 150px)
+                            if (x > screenWidth - 200 && y < 100) {
+                                // This is the settings button area - handle click
+                                showSettings = !showSettings
+                                showUI()
+                                true
+                            } else {
+                                // Anywhere else in top bar just shows UI
+                                showUI()
+                                true
+                            }
+                        }
+                        else -> true
+                    }
                 }
-                .padding(horizontal = 16.dp, vertical = 6.dp)
         ) {
-            Text(
-                text = "Settings",
-                style = TextStyle(
-                    color = if (uiVisible) Color.White else Color.Transparent,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium
+            // Filename - Top left
+            if (uiVisible) {
+                Text(
+                    text = fileName,
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium
+                    ),
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(start = 60.dp, top = 20.dp)
+                        .background(Color.DarkGray.copy(alpha = 0.8f))
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
                 )
-            )
+            }
+            
+            // Settings button visual - Top right
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 20.dp, end = 60.dp)
+                    .background(if (uiVisible) Color.DarkGray.copy(alpha = 0.8f) else Color.Transparent)
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = "Settings",
+                    style = TextStyle(
+                        color = if (uiVisible) Color.White else Color.Transparent,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                )
+            }
         }
         
         // SETTINGS PANEL - Appears below settings button
@@ -697,9 +725,17 @@ fun PlayerOverlay(
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 60.dp, end = 60.dp)
+                    .padding(top = 80.dp, end = 60.dp)
                     .width(300.dp)
                     .background(Color.DarkGray.copy(alpha = 0.95f))
+                    .pointerInteropFilter { 
+                        // Consume all touch events in settings panel
+                        when (it.action) {
+                            MotionEvent.ACTION_DOWN -> true
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_MOVE -> true
+                            else -> false
+                        }
+                    }
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
@@ -738,10 +774,11 @@ fun PlayerOverlay(
             }
         }
         
-        // GESTURE AREA - Full screen for touch handling
+        // GESTURE AREA - Rest of the screen for swipe gestures (placed AFTER top bar)
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .padding(top = 100.dp) // Leave space for top bar
                 .pointerInteropFilter { event ->
                     when (event.action) {
                         MotionEvent.ACTION_DOWN -> {
