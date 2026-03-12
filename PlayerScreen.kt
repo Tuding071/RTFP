@@ -10,12 +10,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -213,6 +211,7 @@ fun PlayerOverlay(
     // Settings state
     var showSettings by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(PlayerSettings()) }
+    var showSettingsPanel by remember { mutableStateOf(false) }
     
     // Settings input dialog state
     var showSeekThrottleDialog by remember { mutableStateOf(false) }
@@ -220,7 +219,7 @@ fun PlayerOverlay(
     var showVerticalPixelDialog by remember { mutableStateOf(false) }
     var tempInputValue by remember { mutableStateOf("") }
     
-    // NEW: Throttling for horizontal/vertical swipe
+    // Throttling for horizontal/vertical swipe
     var lastSeekTime by remember { mutableStateOf(0L) }
     var lastHorizontalUpdateTime by remember { mutableStateOf(0L) }
     var lastVerticalUpdateTime by remember { mutableStateOf(0L) }
@@ -247,20 +246,25 @@ fun PlayerOverlay(
     var showPlaybackFeedback by remember { mutableStateOf(false) }
     var playbackFeedbackText by remember { mutableStateOf("") }
     
-    var showQuickSeekFeedback by remember { mutableStateOf(false) }
-    var quickSeekFeedbackText by remember { mutableStateOf("") }
+    // UI visibility timeout (separate from settings)
+    var uiVisible by remember { mutableStateOf(true) }
     
     // Track if duration is valid for seekbar
     var isDurationValid by remember { mutableStateOf(false) }
     
-    // FIXED: Auto-hide seekbar with proper lifecycle - no more job leaks
-    LaunchedEffect(showSeekbar, userInteracting, showSettings) {
-        if (showSeekbar && !userInteracting && !showSettings) {
-            delay(4000)
-            if (!userInteracting && !showSettings) {
-                showSeekbar = false
-                showVideoInfo = false
+    // Auto-hide UI after 4 seconds of no interaction
+    LaunchedEffect(userInteracting, showSettingsPanel) {
+        if (!showSettingsPanel) {
+            if (userInteracting) {
+                uiVisible = true
+            } else {
+                delay(4000)
+                if (!userInteracting && !showSettingsPanel) {
+                    uiVisible = false
+                }
             }
+        } else {
+            uiVisible = true
         }
     }
     
@@ -290,12 +294,6 @@ fun PlayerOverlay(
             delay(100)
             userInteracting = false
         }
-    }
-    
-    fun showSeekbarWithTimeout() {
-        showSeekbar = true
-        showVideoInfo = true
-        // No need to schedule manually - LaunchedEffect handles it
     }
     
     fun showPlaybackFeedback(text: String) {
@@ -362,12 +360,7 @@ fun PlayerOverlay(
             mpv.setPropertyBoolean("pause", true)
             showPlaybackFeedback("Pause")
         }
-        if (showSeekbar) {
-            showSeekbar = false
-            showVideoInfo = false
-        } else {
-            showSeekbarWithTimeout()
-        }
+        cancelAutoHide()
     }
     
     fun startLongTapDetection() {
@@ -408,8 +401,6 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
-        showSeekbar = true
-        showVideoInfo = true
         
         if (wasPlayingBeforeSeek) {
             mpv.setPropertyBoolean("pause", true)
@@ -428,8 +419,6 @@ fun PlayerOverlay(
         wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
-        showSeekbar = true
-        showVideoInfo = true
         
         if (wasPlayingBeforeSeek) {
             mpv.setPropertyBoolean("pause", true)
@@ -578,9 +567,6 @@ fun PlayerOverlay(
                 getBestAvailableFileName(context, mpv)
             }
         }
-        
-        showVideoInfo = true
-        showSeekbar = true
     }
     
     // Speed control backup
@@ -626,8 +612,6 @@ fun PlayerOverlay(
             isSeeking = true
             wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
             showSeekTime = true
-            showSeekbar = true
-            showVideoInfo = true
             
             if (wasPlayingBeforeSeek) {
                 mpv.setPropertyBoolean("pause", true)
@@ -659,58 +643,74 @@ fun PlayerOverlay(
         seekDirection = ""
     }
     
-    val videoInfoTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
-    val videoInfoBackgroundAlpha = if (isSeeking || isDragging) 0.0f else 0.8f
-    val timeDisplayTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
-    val timeDisplayBackgroundAlpha = if (isSeeking || isDragging) 0.0f else 0.8f
+    val uiAlpha = if (uiVisible) 1.0f else 0.0f
+    val uiBackgroundAlpha = if (uiVisible) 0.8f else 0.0f
     
     Box(modifier = modifier.fillMaxSize()) {
-        // Settings button - placed OUTSIDE the gesture area
+        // TOP UI BAR - Always on top, separate from gestures
         Box(
             modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 20.dp, end = 60.dp)
-                .background(Color.DarkGray.copy(alpha = 0.8f))
+                .fillMaxWidth()
+                .height(60.dp)
+                .align(Alignment.TopCenter)
+                .background(Color.Black.copy(alpha = uiBackgroundAlpha * 0.5f))
                 .clickable { 
-                    showSettings = !showSettings
-                    if (showSettings) {
-                        showSeekbar = true
-                        showVideoInfo = true
+                    // This box just captures clicks to show UI
+                    if (!uiVisible) {
+                        uiVisible = true
                         cancelAutoHide()
                     }
                 }
-                .padding(horizontal = 16.dp, vertical = 6.dp)
-                .pointerInteropFilter { 
-                    // Consume all touch events to prevent them from reaching the gesture area
-                    when (it.action) {
-                        MotionEvent.ACTION_DOWN -> true
-                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> true
-                        else -> false
-                    }
-                }
         ) {
+            // Filename (left side)
             Text(
-                text = "Settings",
+                text = fileName,
                 style = TextStyle(
-                    color = Color.White,
+                    color = Color.White.copy(alpha = uiAlpha),
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Medium
-                )
+                ),
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 60.dp)
+                    .background(Color.DarkGray.copy(alpha = uiBackgroundAlpha))
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
             )
-        }
-        
-        // Settings panel - also OUTSIDE the gesture area
-        if (showSettings) {
+            
+            // Settings button (right side)
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 60.dp, end = 60.dp)
-                    .width(250.dp)
-                    .background(Color.DarkGray.copy(alpha = 0.95f))
-                    .pointerInteropFilter { 
-                        // Consume all touch events to prevent them from reaching the gesture area
-                        true
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 60.dp)
+                    .background(Color.DarkGray.copy(alpha = uiBackgroundAlpha))
+                    .clickable { 
+                        showSettingsPanel = !showSettingsPanel
+                        if (showSettingsPanel) {
+                            uiVisible = true
+                            cancelAutoHide()
+                        }
                     }
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    text = "Settings",
+                    style = TextStyle(
+                        color = Color.White.copy(alpha = uiAlpha),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                )
+            }
+        }
+        
+        // Settings panel - appears below the top bar
+        if (showSettingsPanel && uiVisible) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 60.dp)
+                    .width(300.dp)
+                    .background(Color.DarkGray.copy(alpha = 0.95f))
             ) {
                 Column(
                     modifier = Modifier.padding(16.dp),
@@ -749,43 +749,47 @@ fun PlayerOverlay(
             }
         }
         
-        // Gesture area (main player controls) - placed AFTER settings button so it doesn't block it
+        // Gesture area (main player controls)
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInteropFilter { event ->
-                    // Only process gestures if not touching settings area
-                    when (event.action) {
-                        MotionEvent.ACTION_DOWN -> {
-                            touchStartX = event.x
-                            touchStartY = event.y
-                            startLongTapDetection()
-                            true
-                        }
-                        MotionEvent.ACTION_MOVE -> {
-                            if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
-                                when (checkForSwipeDirection(event.x, event.y)) {
-                                    "horizontal" -> startHorizontalSeeking(event.x)
-                                    "vertical" -> startVerticalSeeking(event.y)
-                                }
-                            } else if (isHorizontalSwipe) {
-                                handleHorizontalSeeking(event.x)
-                            } else if (isVerticalSwipe) {
-                                handleVerticalSeeking(event.y)
+                    // Only process gestures if UI is visible or we're in a gesture
+                    if (uiVisible || isTouching || isHorizontalSwipe || isVerticalSwipe) {
+                        when (event.action) {
+                            MotionEvent.ACTION_DOWN -> {
+                                touchStartX = event.x
+                                touchStartY = event.y
+                                startLongTapDetection()
+                                true
                             }
-                            true
+                            MotionEvent.ACTION_MOVE -> {
+                                if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
+                                    when (checkForSwipeDirection(event.x, event.y)) {
+                                        "horizontal" -> startHorizontalSeeking(event.x)
+                                        "vertical" -> startVerticalSeeking(event.y)
+                                    }
+                                } else if (isHorizontalSwipe) {
+                                    handleHorizontalSeeking(event.x)
+                                } else if (isVerticalSwipe) {
+                                    handleVerticalSeeking(event.y)
+                                }
+                                true
+                            }
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                endTouch()
+                                true
+                            }
+                            else -> false
                         }
-                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                            endTouch()
-                            true
-                        }
-                        else -> false
+                    } else {
+                        false
                     }
                 }
         )
         
-        // Seekbar (UI element)
-        if (showSeekbar) {
+        // Seekbar (bottom UI element)
+        if (uiVisible) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -806,12 +810,12 @@ fun PlayerOverlay(
                             Text(
                                 text = "$currentTime / $totalTime",
                                 style = TextStyle(
-                                    color = Color.White.copy(alpha = timeDisplayTextAlpha),
+                                    color = Color.White,
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Medium
                                 ),
                                 modifier = Modifier
-                                    .background(Color.DarkGray.copy(alpha = timeDisplayBackgroundAlpha))
+                                    .background(Color.DarkGray.copy(alpha = 0.8f))
                                     .padding(horizontal = 12.dp, vertical = 4.dp)
                             )
                         }
@@ -850,33 +854,11 @@ fun PlayerOverlay(
             }
         }
         
-        // Video title
-        if (showVideoInfo) {
-            Text(
-                text = fileName,
-                style = TextStyle(
-                    color = Color.White.copy(alpha = videoInfoTextAlpha),
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Medium
-                ),
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .offset(x = 60.dp, y = 20.dp)
-                    .background(Color.DarkGray.copy(alpha = videoInfoBackgroundAlpha))
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-            )
-        }
-        
-        // Feedback
-        Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
+        // Feedback overlays (always visible when active)
+        Box(modifier = Modifier.align(Alignment.Center)) {
             when {
                 isSpeedingUp -> Text(
                     text = "2X",
-                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
-                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
-                )
-                showQuickSeekFeedback -> Text(
-                    text = quickSeekFeedbackText,
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
