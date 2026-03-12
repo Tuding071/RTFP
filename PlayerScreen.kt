@@ -665,20 +665,29 @@ fun PlayerOverlay(
     val timeDisplayBackgroundAlpha = if (isSeeking || isDragging) 0.0f else 0.8f
     
     Box(modifier = modifier.fillMaxSize()) {
-        // Settings button
+        // Settings button - placed OUTSIDE the gesture area
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(top = 20.dp, end = 60.dp)
-                .background(Color.DarkGray.copy(alpha = 0.8f), shape = RoundedCornerShape(4.dp))
+                .background(Color.DarkGray.copy(alpha = 0.8f))
                 .clickable { 
                     showSettings = !showSettings
                     if (showSettings) {
                         showSeekbar = true
                         showVideoInfo = true
+                        cancelAutoHide()
                     }
                 }
                 .padding(horizontal = 16.dp, vertical = 6.dp)
+                .pointerInteropFilter { 
+                    // Consume all touch events to prevent them from reaching the gesture area
+                    when (it.action) {
+                        MotionEvent.ACTION_DOWN -> true
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> true
+                        else -> false
+                    }
+                }
         ) {
             Text(
                 text = "Settings",
@@ -690,17 +699,21 @@ fun PlayerOverlay(
             )
         }
         
-        // Settings panel
+        // Settings panel - also OUTSIDE the gesture area
         if (showSettings) {
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 60.dp, end = 60.dp)
                     .width(250.dp)
-                    .background(Color.DarkGray.copy(alpha = 0.95f), shape = RoundedCornerShape(8.dp))
-                    .padding(16.dp)
+                    .background(Color.DarkGray.copy(alpha = 0.95f))
+                    .pointerInteropFilter { 
+                        // Consume all touch events to prevent them from reaching the gesture area
+                        true
+                    }
             ) {
                 Column(
+                    modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     // Seek Throttle setting
@@ -716,7 +729,7 @@ fun PlayerOverlay(
                     // Horizontal drag sensitivity
                     SettingsItem(
                         title = "Horizontal Sensitivity",
-                        value = "${String.format("%.2f", settings.horizontalPixelsPerMs)} px/ms",
+                        value = "${String.format("%.3f", settings.horizontalPixelsPerMs)} px/ms",
                         onClick = {
                             tempInputValue = settings.horizontalPixelsPerMs.toString()
                             showHorizontalPixelDialog = true
@@ -726,7 +739,7 @@ fun PlayerOverlay(
                     // Vertical drag sensitivity
                     SettingsItem(
                         title = "Vertical Sensitivity",
-                        value = "${String.format("%.2f", settings.verticalPixelsPerMs)} px/ms",
+                        value = "${String.format("%.3f", settings.verticalPixelsPerMs)} px/ms",
                         onClick = {
                             tempInputValue = settings.verticalPixelsPerMs.toString()
                             showVerticalPixelDialog = true
@@ -736,73 +749,42 @@ fun PlayerOverlay(
             }
         }
         
-        // Gesture area
-        Box(modifier = Modifier.fillMaxSize()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.05f)
-                    .align(Alignment.TopStart)
-            )
-            
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.95f)
-                    .align(Alignment.BottomStart)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.05f)
-                        .fillMaxHeight()
-                        .align(Alignment.CenterStart)
-                )
-                
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.9f)
-                        .fillMaxHeight()
-                        .align(Alignment.Center)
-                        .pointerInteropFilter { event ->
-                            when (event.action) {
-                                MotionEvent.ACTION_DOWN -> {
-                                    touchStartX = event.x
-                                    touchStartY = event.y
-                                    startLongTapDetection()
-                                    true
-                                }
-                                MotionEvent.ACTION_MOVE -> {
-                                    if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
-                                        when (checkForSwipeDirection(event.x, event.y)) {
-                                            "horizontal" -> startHorizontalSeeking(event.x)
-                                            "vertical" -> startVerticalSeeking(event.y)
-                                        }
-                                    } else if (isHorizontalSwipe) {
-                                        handleHorizontalSeeking(event.x)
-                                    } else if (isVerticalSwipe) {
-                                        handleVerticalSeeking(event.y)
-                                    }
-                                    true
-                                }
-                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                    endTouch()
-                                    true
-                                }
-                                else -> false
-                            }
+        // Gesture area (main player controls) - placed AFTER settings button so it doesn't block it
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInteropFilter { event ->
+                    // Only process gestures if not touching settings area
+                    when (event.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            touchStartX = event.x
+                            touchStartY = event.y
+                            startLongTapDetection()
+                            true
                         }
-                )
-                
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.05f)
-                        .fillMaxHeight()
-                        .align(Alignment.CenterEnd)
-                )
-            }
-        }
+                        MotionEvent.ACTION_MOVE -> {
+                            if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
+                                when (checkForSwipeDirection(event.x, event.y)) {
+                                    "horizontal" -> startHorizontalSeeking(event.x)
+                                    "vertical" -> startVerticalSeeking(event.y)
+                                }
+                            } else if (isHorizontalSwipe) {
+                                handleHorizontalSeeking(event.x)
+                            } else if (isVerticalSwipe) {
+                                handleVerticalSeeking(event.y)
+                            }
+                            true
+                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            endTouch()
+                            true
+                        }
+                        else -> false
+                    }
+                }
+        )
         
-        // Seekbar
+        // Seekbar (UI element)
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -965,7 +947,6 @@ fun SettingsItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(4.dp))
             .clickable { onClick() }
             .background(Color.Black.copy(alpha = 0.3f))
             .padding(horizontal = 12.dp, vertical = 8.dp),
@@ -1008,7 +989,7 @@ fun SettingsInputDialog(
             modifier = Modifier
                 .align(Alignment.Center)
                 .width(300.dp)
-                .background(Color.DarkGray, shape = RoundedCornerShape(8.dp))
+                .background(Color.DarkGray)
                 .padding(16.dp)
         ) {
             Column(
@@ -1035,7 +1016,7 @@ fun SettingsInputDialog(
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(Color.Black.copy(alpha = 0.3f), shape = RoundedCornerShape(4.dp))
+                        .background(Color.Black.copy(alpha = 0.3f))
                         .padding(12.dp)
                 )
                 
@@ -1046,7 +1027,6 @@ fun SettingsInputDialog(
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .clip(RoundedCornerShape(4.dp))
                             .background(Color.Gray)
                             .clickable { onDismiss() }
                             .padding(vertical = 8.dp)
@@ -1061,7 +1041,6 @@ fun SettingsInputDialog(
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .clip(RoundedCornerShape(4.dp))
                             .background(Color.White)
                             .clickable { onSave(inputText) }
                             .padding(vertical = 8.dp)
