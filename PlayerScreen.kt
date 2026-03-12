@@ -7,14 +7,12 @@ import android.util.AttributeSet
 import android.util.Log
 import android.view.MotionEvent
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.pointerInteropFilter
@@ -173,13 +171,6 @@ fun PlayerScreen(
     }
 }
 
-// Settings data class
-data class PlayerSettings(
-    var seekThrottleMs: Int = 50,
-    var horizontalPixelsPerMs: Float = 3f / 50f, // 3 pixels per 50ms = 0.06 pixels/ms
-    var verticalPixelsPerMs: Float = 3f / 50f
-)
-
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun PlayerOverlay(
@@ -194,6 +185,7 @@ fun PlayerOverlay(
     var seekTargetTime by remember { mutableStateOf("00:00") }
     var showSeekTime by remember { mutableStateOf(false) }
     var isSpeedingUp by remember { mutableStateOf(false) }
+    var showSeekbar by remember { mutableStateOf(true) }
     
     var seekbarPosition by remember { mutableStateOf(0f) }
     var seekbarDuration by remember { mutableStateOf(1f) }
@@ -201,26 +193,15 @@ fun PlayerOverlay(
     
     var isSeeking by remember { mutableStateOf(false) }
     var seekStartX by remember { mutableStateOf(0f) }
-    var seekStartY by remember { mutableStateOf(0f) }
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     var seekDirection by remember { mutableStateOf("") }
     var isSeekInProgress by remember { mutableStateOf(false) }
+    val seekThrottleMs = 16L
     
-    // Settings state
-    var showSettings by remember { mutableStateOf(false) }
-    var settings by remember { mutableStateOf(PlayerSettings()) }
-    
-    // Settings input dialog state
-    var showSeekThrottleDialog by remember { mutableStateOf(false) }
-    var showHorizontalPixelDialog by remember { mutableStateOf(false) }
-    var showVerticalPixelDialog by remember { mutableStateOf(false) }
-    var tempInputValue by remember { mutableStateOf("") }
-    
-    // Throttling for horizontal/vertical swipe
+    // NEW: Throttling for horizontal swipe
     var lastSeekTime by remember { mutableStateOf(0L) }
     var lastHorizontalUpdateTime by remember { mutableStateOf(0L) }
-    var lastVerticalUpdateTime by remember { mutableStateOf(0L) }
     
     var touchStartTime by remember { mutableStateOf(0L) }
     var touchStartX by remember { mutableStateOf(0f) }
@@ -235,7 +216,9 @@ fun PlayerOverlay(
     val verticalSwipeThreshold = 40f
     val maxVerticalMovement = 50f
     val maxHorizontalMovement = 50f
+    val quickSeekAmount = 5
     
+    var showVideoInfo by remember { mutableStateOf(true) }
     var fileName by remember { mutableStateOf("RTFP") }
     
     var userInteracting by remember { mutableStateOf(false) }
@@ -243,26 +226,20 @@ fun PlayerOverlay(
     var showPlaybackFeedback by remember { mutableStateOf(false) }
     var playbackFeedbackText by remember { mutableStateOf("") }
     
-    // UI visibility - starts visible, hides after timeout
-    var uiVisible by remember { mutableStateOf(true) }
+    var showQuickSeekFeedback by remember { mutableStateOf(false) }
+    var quickSeekFeedbackText by remember { mutableStateOf("") }
     
     // Track if duration is valid for seekbar
     var isDurationValid by remember { mutableStateOf(false) }
     
-    // Auto-hide UI after 4 seconds of no interaction
-    LaunchedEffect(userInteracting, showSettings, showSeekThrottleDialog, showHorizontalPixelDialog, showVerticalPixelDialog) {
-        // Don't auto-hide if settings are open or dialogs are showing
-        if (!showSettings && !showSeekThrottleDialog && !showHorizontalPixelDialog && !showVerticalPixelDialog) {
-            if (userInteracting) {
-                uiVisible = true
-            } else {
-                delay(4000)
-                if (!userInteracting && !showSettings && !showSeekThrottleDialog && !showHorizontalPixelDialog && !showVerticalPixelDialog) {
-                    uiVisible = false
-                }
+    // FIXED: Auto-hide seekbar with proper lifecycle - no more job leaks
+    LaunchedEffect(showSeekbar, userInteracting) {
+        if (showSeekbar && !userInteracting) {
+            delay(4000)
+            if (!userInteracting) {
+                showSeekbar = false
+                showVideoInfo = false
             }
-        } else {
-            uiVisible = true
         }
     }
     
@@ -294,9 +271,10 @@ fun PlayerOverlay(
         }
     }
     
-    fun showUI() {
-        uiVisible = true
-        cancelAutoHide()
+    fun showSeekbarWithTimeout() {
+        showSeekbar = true
+        showVideoInfo = true
+        // No need to schedule manually - LaunchedEffect handles it
     }
     
     fun showPlaybackFeedback(text: String) {
@@ -308,26 +286,14 @@ fun PlayerOverlay(
         }
     }
     
-    // For HORIZONTAL SWIPE - smooth seeking with adjustable sensitivity
-    fun performHorizontalSmoothSeek(targetPosition: Double) {
+    // For HORIZONTAL SWIPE - smooth seeking (frame-by-frame, no rounding) with 50ms throttle
+    fun performSmoothSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         isSeekInProgress = true
         // NO ROUNDING - smooth for horizontal swipe
         mpv.command("seek", targetPosition.toString(), "absolute", "exact")
         coroutineScope.launch {
-            delay(settings.seekThrottleMs.toLong())
-            isSeekInProgress = false
-        }
-    }
-    
-    // For VERTICAL SWIPE - smooth seeking with adjustable sensitivity
-    fun performVerticalSmoothSeek(targetPosition: Double) {
-        if (isSeekInProgress) return
-        isSeekInProgress = true
-        // NO ROUNDING - smooth for vertical swipe
-        mpv.command("seek", targetPosition.toString(), "absolute", "exact")
-        coroutineScope.launch {
-            delay(settings.seekThrottleMs.toLong())
+            delay(seekThrottleMs)
             isSeekInProgress = false
         }
     }
@@ -340,7 +306,7 @@ fun PlayerOverlay(
         val roundedPosition = (targetPosition + 0.5).toInt().toDouble()
         mpv.command("seek", roundedPosition.toString(), "absolute", "exact")
         coroutineScope.launch {
-            delay(settings.seekThrottleMs.toLong())
+            delay(seekThrottleMs)
             isSeekInProgress = false
         }
     }
@@ -349,28 +315,39 @@ fun PlayerOverlay(
         return (mpv.getPropertyDouble("time-pos") ?: 0.0).toFloat()
     }
     
+    fun performQuickSeek(seconds: Int) {
+        val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
+        val duration = mpv.getPropertyDouble("duration") ?: 0.0
+        
+        quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
+        showQuickSeekFeedback = true
+        coroutineScope.launch {
+            delay(1000)
+            showQuickSeekFeedback = false
+        }
+        
+        mpv.command("seek", seconds.toString(), "relative", "exact")
+    }
+    
     fun handleTap() {
-        if (uiVisible && !showSettings) {
-            // If UI is visible and settings not open, hide it on tap
-            uiVisible = false
-        } else {
-            // If UI is hidden or settings are open, show it and handle pause/play
-            showUI()
-            if (!showSettings) {
-                val currentPaused = mpv.getPropertyBoolean("pause") ?: false
-                if (currentPaused) {
-                    coroutineScope.launch {
-                        val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
-                        mpv.command("seek", currentPos.toString(), "absolute", "exact")
-                        delay(100)
-                        mpv.setPropertyBoolean("pause", false)
-                    }
-                    showPlaybackFeedback("Resume")
-                } else {
-                    mpv.setPropertyBoolean("pause", true)
-                    showPlaybackFeedback("Pause")
-                }
+        val currentPaused = mpv.getPropertyBoolean("pause") ?: false
+        if (currentPaused) {
+            coroutineScope.launch {
+                val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
+                mpv.command("seek", currentPos.toString(), "absolute", "exact")
+                delay(100)
+                mpv.setPropertyBoolean("pause", false)
             }
+            showPlaybackFeedback("Resume")
+        } else {
+            mpv.setPropertyBoolean("pause", true)
+            showPlaybackFeedback("Pause")
+        }
+        if (showSeekbar) {
+            showSeekbar = false
+            showVideoInfo = false
+        } else {
+            showSeekbarWithTimeout()
         }
     }
     
@@ -383,7 +360,6 @@ fun PlayerOverlay(
                 isLongTap = true
                 isSpeedingUp = true
                 mpv.setPropertyDouble("speed", 2.0)
-                showUI()
             }
         }
     }
@@ -407,12 +383,14 @@ fun PlayerOverlay(
     
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
-        showUI()
+        cancelAutoHide()
         seekStartX = startX
         seekStartPosition = mpv.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
         isSeeking = true
         showSeekTime = true
+        showSeekbar = true
+        showVideoInfo = true
         
         if (wasPlayingBeforeSeek) {
             mpv.setPropertyBoolean("pause", true)
@@ -423,30 +401,26 @@ fun PlayerOverlay(
         lastHorizontalUpdateTime = 0L
     }
     
-    fun startVerticalSeeking(startY: Float) {
+    fun startVerticalSwipe(startY: Float) {
         isVerticalSwipe = true
-        showUI()
-        seekStartY = startY
-        seekStartPosition = mpv.getPropertyDouble("time-pos") ?: 0.0
-        wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
-        isSeeking = true
-        showSeekTime = true
+        cancelAutoHide()
+        val deltaY = startY - touchStartY
         
-        if (wasPlayingBeforeSeek) {
-            mpv.setPropertyBoolean("pause", true)
+        if (deltaY < 0) {
+            seekDirection = "+"
+            performQuickSeek(quickSeekAmount)
+        } else {
+            seekDirection = "-"
+            performQuickSeek(-quickSeekAmount)
         }
-        
-        // Reset throttling timers
-        lastSeekTime = 0L
-        lastVerticalUpdateTime = 0L
     }
     
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
         val deltaX = currentX - seekStartX
-        // Use adjustable pixel to time ratio
-        val timeDeltaSeconds = deltaX / settings.horizontalPixelsPerMs / 1000f
+        val pixelsPerSecond = 3f / 0.016f
+        val timeDeltaSeconds = deltaX / pixelsPerSecond
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = mpv.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
@@ -464,39 +438,9 @@ fun PlayerOverlay(
             lastHorizontalUpdateTime = now
         }
         
-        // Throttle MPV seeks to adjustable setting
-        if (now - lastSeekTime > settings.seekThrottleMs) {
-            performHorizontalSmoothSeek(clampedPosition)
-            lastSeekTime = now
-        }
-    }
-    
-    fun handleVerticalSeeking(currentY: Float) {
-        if (!isSeeking) return
-        
-        val deltaY = currentY - seekStartY
-        // Use adjustable pixel to time ratio (inverted: moving up increases time)
-        val timeDeltaSeconds = -deltaY / settings.verticalPixelsPerMs / 1000f
-        val newPositionSeconds = seekStartPosition + timeDeltaSeconds
-        val duration = mpv.getPropertyDouble("duration") ?: 0.0
-        val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
-        
-        seekDirection = if (deltaY < 0) "+" else "-"
-        seekTargetTime = formatTimeSimple(clampedPosition)
-        
-        val now = System.currentTimeMillis()
-        
-        // Update UI every 16ms (60fps) for smooth visual feedback
-        if (now - lastVerticalUpdateTime > 16) {
-            currentTime = formatTimeSimple(clampedPosition)
-            // UPDATE SEEKBAR POSITION IN REAL-TIME
-            seekbarPosition = clampedPosition.toFloat()
-            lastVerticalUpdateTime = now
-        }
-        
-        // Throttle MPV seeks to adjustable setting
-        if (now - lastSeekTime > settings.seekThrottleMs) {
-            performVerticalSmoothSeek(clampedPosition)
+        // Throttle MPV seeks to every 50ms (20fps) to balance performance and smoothness
+        if (now - lastSeekTime > 33) {
+            performSmoothSeek(clampedPosition)
             lastSeekTime = now
         }
     }
@@ -504,7 +448,7 @@ fun PlayerOverlay(
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = mpv.getPropertyDouble("time-pos") ?: seekStartPosition
-            performHorizontalSmoothSeek(currentPos)
+            performSmoothSeek(currentPos)
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -522,25 +466,8 @@ fun PlayerOverlay(
         }
     }
     
-    fun endVerticalSeeking() {
-        if (isSeeking) {
-            val currentPos = mpv.getPropertyDouble("time-pos") ?: seekStartPosition
-            performVerticalSmoothSeek(currentPos)
-            
-            if (wasPlayingBeforeSeek) {
-                coroutineScope.launch {
-                    delay(100)
-                    mpv.setPropertyBoolean("pause", false)
-                }
-            }
-            
-            isSeeking = false
-            showSeekTime = false
-            seekStartY = 0f
-            seekStartPosition = 0.0
-            wasPlayingBeforeSeek = false
-            seekDirection = ""
-        }
+    fun endVerticalSwipe() {
+        isVerticalSwipe = false
     }
     
     fun endTouch() {
@@ -555,9 +482,9 @@ fun PlayerOverlay(
             endHorizontalSeeking()
             isHorizontalSwipe = false
         } else if (isVerticalSwipe) {
-            endVerticalSeeking()
+            endVerticalSwipe()
             isVerticalSwipe = false
-        } else if (touchDuration < 150 && !showSettings) {
+        } else if (touchDuration < 150) {
             handleTap()
         }
         isHorizontalSwipe = false
@@ -579,6 +506,9 @@ fun PlayerOverlay(
                 getBestAvailableFileName(context, mpv)
             }
         }
+        
+        showVideoInfo = true
+        showSeekbar = true
     }
     
     // Speed control backup
@@ -619,11 +549,13 @@ fun PlayerOverlay(
     
     // Progress bar handlers
     fun handleProgressBarDrag(newPosition: Float) {
-        showUI()
+        cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
             wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
             showSeekTime = true
+            showSeekbar = true
+            showVideoInfo = true
             
             if (wasPlayingBeforeSeek) {
                 mpv.setPropertyBoolean("pause", true)
@@ -655,157 +587,78 @@ fun PlayerOverlay(
         seekDirection = ""
     }
     
+    val videoInfoTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
+    val videoInfoBackgroundAlpha = if (isSeeking || isDragging) 0.0f else 0.8f
+    val timeDisplayTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
+    val timeDisplayBackgroundAlpha = if (isSeeking || isDragging) 0.0f else 0.8f
+    
     Box(modifier = modifier.fillMaxSize()) {
-        // TOP BAR - Settings button and filename (always on top)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(100.dp)
-                .align(Alignment.TopCenter)
-        ) {
-            // Filename - Top left
-            if (uiVisible) {
-                Text(
-                    text = fileName,
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium
-                    ),
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(start = 60.dp, top = 20.dp)
-                        .background(Color.DarkGray.copy(alpha = 0.8f))
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                )
-            }
+        // Gesture area
+        Box(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.05f)
+                    .align(Alignment.TopStart)
+            )
             
-            // Settings button - Top right (always clickable)
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 20.dp, end = 60.dp)
-                    .background(if (uiVisible) Color.DarkGray.copy(alpha = 0.8f) else Color.Transparent)
-                    .clickable { 
-                        showSettings = !showSettings
-                        showUI()
-                    }
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    text = "Settings",
-                    style = TextStyle(
-                        color = if (uiVisible) Color.White else Color.Transparent,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                )
-            }
-        }
-        
-        // SETTINGS PANEL - Independent touch area (like seekbar)
-        if (showSettings) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.3f))
-                    .clickable { 
-                        // Close settings when tapping outside
-                        showSettings = false
-                    }
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.95f)
+                    .align(Alignment.BottomStart)
             ) {
                 Box(
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(top = 80.dp, end = 60.dp)
-                        .width(300.dp)
-                        .background(Color.DarkGray.copy(alpha = 0.95f))
-                        .clickable { 
-                            // Prevent clicks from passing through to background
-                            // This empty clickable consumes the touch
+                        .fillMaxWidth(0.05f)
+                        .fillMaxHeight()
+                        .align(Alignment.CenterStart)
+                )
+                
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .fillMaxHeight()
+                        .align(Alignment.Center)
+                        .pointerInteropFilter { event ->
+                            when (event.action) {
+                                MotionEvent.ACTION_DOWN -> {
+                                    touchStartX = event.x
+                                    touchStartY = event.y
+                                    startLongTapDetection()
+                                    true
+                                }
+                                MotionEvent.ACTION_MOVE -> {
+                                    if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
+                                        when (checkForSwipeDirection(event.x, event.y)) {
+                                            "horizontal" -> startHorizontalSeeking(event.x)
+                                            "vertical" -> startVerticalSwipe(event.y)
+                                        }
+                                    } else if (isHorizontalSwipe) {
+                                        handleHorizontalSeeking(event.x)
+                                    }
+                                    true
+                                }
+                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                    endTouch()
+                                    true
+                                }
+                                else -> false
+                            }
                         }
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        // Seek Throttle setting
-                        SettingsItem(
-                            title = "Seek Throttle",
-                            value = "${settings.seekThrottleMs} ms",
-                            onClick = {
-                                tempInputValue = settings.seekThrottleMs.toString()
-                                showSeekThrottleDialog = true
-                                showUI()
-                            }
-                        )
-                        
-                        // Horizontal drag sensitivity
-                        SettingsItem(
-                            title = "Horizontal Sensitivity",
-                            value = "${String.format("%.3f", settings.horizontalPixelsPerMs)} px/ms",
-                            onClick = {
-                                tempInputValue = settings.horizontalPixelsPerMs.toString()
-                                showHorizontalPixelDialog = true
-                                showUI()
-                            }
-                        )
-                        
-                        // Vertical drag sensitivity
-                        SettingsItem(
-                            title = "Vertical Sensitivity",
-                            value = "${String.format("%.3f", settings.verticalPixelsPerMs)} px/ms",
-                            onClick = {
-                                tempInputValue = settings.verticalPixelsPerMs.toString()
-                                showVerticalPixelDialog = true
-                                showUI()
-                            }
-                        )
-                    }
-                }
+                )
+                
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.05f)
+                        .fillMaxHeight()
+                        .align(Alignment.CenterEnd)
+                )
             }
         }
         
-        // GESTURE AREA - For swipe gestures (only when settings are closed)
-        if (!showSettings) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInteropFilter { event ->
-                        when (event.action) {
-                            MotionEvent.ACTION_DOWN -> {
-                                touchStartX = event.x
-                                touchStartY = event.y
-                                startLongTapDetection()
-                                true
-                            }
-                            MotionEvent.ACTION_MOVE -> {
-                                if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
-                                    when (checkForSwipeDirection(event.x, event.y)) {
-                                        "horizontal" -> startHorizontalSeeking(event.x)
-                                        "vertical" -> startVerticalSeeking(event.y)
-                                    }
-                                } else if (isHorizontalSwipe) {
-                                    handleHorizontalSeeking(event.x)
-                                } else if (isVerticalSwipe) {
-                                    handleVerticalSeeking(event.y)
-                                }
-                                true
-                            }
-                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                endTouch()
-                                true
-                            }
-                            else -> false
-                        }
-                    }
-            )
-        }
-        
-        // SEEKBAR - Bottom (only when UI visible and settings closed)
-        if (uiVisible && !showSettings) {
+        // Seekbar
+        if (showSeekbar) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -826,12 +679,12 @@ fun PlayerOverlay(
                             Text(
                                 text = "$currentTime / $totalTime",
                                 style = TextStyle(
-                                    color = Color.White,
+                                    color = Color.White.copy(alpha = timeDisplayTextAlpha),
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Medium
                                 ),
                                 modifier = Modifier
-                                    .background(Color.DarkGray.copy(alpha = 0.8f))
+                                    .background(Color.DarkGray.copy(alpha = timeDisplayBackgroundAlpha))
                                     .padding(horizontal = 12.dp, vertical = 4.dp)
                             )
                         }
@@ -870,11 +723,33 @@ fun PlayerOverlay(
             }
         }
         
-        // FEEDBACK OVERLAYS - Always visible when active
-        Box(modifier = Modifier.align(Alignment.Center)) {
+        // Video title
+        if (showVideoInfo) {
+            Text(
+                text = fileName,
+                style = TextStyle(
+                    color = Color.White.copy(alpha = videoInfoTextAlpha),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset(x = 60.dp, y = 20.dp)
+                    .background(Color.DarkGray.copy(alpha = videoInfoBackgroundAlpha))
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+            )
+        }
+        
+        // Feedback
+        Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 isSpeedingUp -> Text(
                     text = "2X",
+                    style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                    modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+                showQuickSeekFeedback -> Text(
+                    text = quickSeekFeedbackText,
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
@@ -888,184 +763,6 @@ fun PlayerOverlay(
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
-            }
-        }
-        
-        // SETTINGS INPUT DIALOGS
-        if (showSeekThrottleDialog) {
-            SettingsInputDialog(
-                title = "Seek Throttle (ms)",
-                initialValue = tempInputValue,
-                onDismiss = { 
-                    showSeekThrottleDialog = false
-                    showUI()
-                },
-                onSave = { value ->
-                    value.toIntOrNull()?.let {
-                        settings = settings.copy(seekThrottleMs = it)
-                    }
-                    showSeekThrottleDialog = false
-                    showUI()
-                }
-            )
-        }
-        
-        if (showHorizontalPixelDialog) {
-            SettingsInputDialog(
-                title = "Horizontal Sensitivity (px/ms)",
-                initialValue = tempInputValue,
-                onDismiss = { 
-                    showHorizontalPixelDialog = false
-                    showUI()
-                },
-                onSave = { value ->
-                    value.toFloatOrNull()?.let {
-                        settings = settings.copy(horizontalPixelsPerMs = it)
-                    }
-                    showHorizontalPixelDialog = false
-                    showUI()
-                }
-            )
-        }
-        
-        if (showVerticalPixelDialog) {
-            SettingsInputDialog(
-                title = "Vertical Sensitivity (px/ms)",
-                initialValue = tempInputValue,
-                onDismiss = { 
-                    showVerticalPixelDialog = false
-                    showUI()
-                },
-                onSave = { value ->
-                    value.toFloatOrNull()?.let {
-                        settings = settings.copy(verticalPixelsPerMs = it)
-                    }
-                    showVerticalPixelDialog = false
-                    showUI()
-                }
-            )
-        }
-    }
-}
-
-@Composable
-fun SettingsItem(
-    title: String,
-    value: String,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-            .background(Color.Black.copy(alpha = 0.3f))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(
-            text = title,
-            style = TextStyle(
-                color = Color.White,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium
-            )
-        )
-        Text(
-            text = value,
-            style = TextStyle(
-                color = Color.White.copy(alpha = 0.8f),
-                fontSize = 14.sp
-            )
-        )
-    }
-}
-
-@Composable
-fun SettingsInputDialog(
-    title: String,
-    initialValue: String,
-    onDismiss: () -> Unit,
-    onSave: (String) -> Unit
-) {
-    var inputText by remember { mutableStateOf(initialValue) }
-    
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.5f))
-            .clickable { onDismiss() }
-    ) {
-        Box(
-            modifier = Modifier
-                .align(Alignment.Center)
-                .width(300.dp)
-                .background(Color.DarkGray)
-                .padding(16.dp)
-                .clickable { 
-                    // Prevent clicks from passing through
-                    // This empty clickable consumes the touch
-                }
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Text(
-                    text = title,
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                )
-                
-                androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(8.dp))
-                
-                androidx.compose.foundation.text.BasicTextField(
-                    value = inputText,
-                    onValueChange = { inputText = it },
-                    textStyle = TextStyle(
-                        color = Color.White,
-                        fontSize = 16.sp
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color.Black.copy(alpha = 0.3f))
-                        .padding(12.dp)
-                )
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .background(Color.Gray)
-                            .clickable { onDismiss() }
-                            .padding(vertical = 8.dp)
-                    ) {
-                        Text(
-                            text = "Cancel",
-                            color = Color.White,
-                            modifier = Modifier.align(Alignment.Center)
-                        )
-                    }
-                    
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .background(Color.White)
-                            .clickable { onSave(inputText) }
-                            .padding(vertical = 8.dp)
-                    ) {
-                        Text(
-                            text = "Save",
-                            color = Color.Black,
-                            modifier = Modifier.align(Alignment.Center)
-                        )
-                    }
-                }
             }
         }
     }
