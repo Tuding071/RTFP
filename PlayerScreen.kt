@@ -98,7 +98,6 @@ class ThumbnailSystem(
         // Memory calculation:
         // 20 seconds × 24fps = 480 thumbnails in window
         // 480 × 205KB = 98.4MB total in memory
-        // This is acceptable for modern devices (most have 256MB+ heap)
     }
     
     // Tier 1: Disk cache for full grid (every 1 second)
@@ -780,7 +779,8 @@ fun PlayerOverlay(
                     .fillMaxWidth()
                     .height(70.dp)
                     .align(Alignment.BottomStart)
-                    .padding(horizontal = 60.dp, bottom = 20.dp)
+                    .padding(horizontal = 60.dp)
+                    .padding(bottom = 20.dp)  // FIXED: Separated padding parameters
             ) {
                 Column(
                     verticalArrangement = Arrangement.spacedBy(4.dp)
