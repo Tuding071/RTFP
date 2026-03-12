@@ -656,36 +656,12 @@ fun PlayerOverlay(
     }
     
     Box(modifier = modifier.fillMaxSize()) {
-        // TOP CLICKABLE AREA - Settings button and filename (placed FIRST to intercept touches)
+        // TOP BAR - Settings button and filename (always on top)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(100.dp)
                 .align(Alignment.TopCenter)
-                .pointerInteropFilter { 
-                    // Consume all touch events in this area to prevent them from reaching gesture area
-                    when (it.action) {
-                        MotionEvent.ACTION_DOWN -> {
-                            // Check if touch is within settings button area
-                            val x = it.x
-                            val y = it.y
-                            val screenWidth = context.resources.displayMetrics.widthPixels
-                            
-                            // Settings button is at top right (approx last 150px)
-                            if (x > screenWidth - 200 && y < 100) {
-                                // This is the settings button area - handle click
-                                showSettings = !showSettings
-                                showUI()
-                                true
-                            } else {
-                                // Anywhere else in top bar just shows UI
-                                showUI()
-                                true
-                            }
-                        }
-                        else -> true
-                    }
-                }
         ) {
             // Filename - Top left
             if (uiVisible) {
@@ -704,12 +680,16 @@ fun PlayerOverlay(
                 )
             }
             
-            // Settings button visual - Top right
+            // Settings button - Top right (always clickable)
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 20.dp, end = 60.dp)
                     .background(if (uiVisible) Color.DarkGray.copy(alpha = 0.8f) else Color.Transparent)
+                    .clickable { 
+                        showSettings = !showSettings
+                        showUI()
+                    }
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             ) {
                 Text(
@@ -723,108 +703,109 @@ fun PlayerOverlay(
             }
         }
         
-        // SETTINGS PANEL - Appears below settings button (placed AFTER top bar but BEFORE gesture area)
+        // SETTINGS PANEL - Independent touch area (like seekbar)
         if (showSettings) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 80.dp, end = 60.dp)
-                    .width(300.dp)
-                    .background(Color.DarkGray.copy(alpha = 0.95f))
-                    .pointerInteropFilter { 
-                        // CONSUME ALL touch events in settings panel
-                        when (it.action) {
-                            MotionEvent.ACTION_DOWN -> {
-                                // Don't pass to gesture area
-                                true
-                            }
-                            MotionEvent.ACTION_UP, MotionEvent.ACTION_MOVE -> {
-                                // Don't pass to gesture area
-                                true
-                            }
-                            else -> true
-                        }
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.3f))
+                    .clickable { 
+                        // Close settings when tapping outside
+                        showSettings = false
                     }
             ) {
-                Column(
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                        .align(Alignment.TopEnd)
+                        .padding(top = 80.dp, end = 60.dp)
+                        .width(300.dp)
+                        .background(Color.DarkGray.copy(alpha = 0.95f))
+                        .clickable { 
+                            // Prevent clicks from passing through to background
+                            // This empty clickable consumes the touch
+                        }
                 ) {
-                    // Seek Throttle setting
-                    SettingsItem(
-                        title = "Seek Throttle",
-                        value = "${settings.seekThrottleMs} ms",
-                        onClick = {
-                            tempInputValue = settings.seekThrottleMs.toString()
-                            showSeekThrottleDialog = true
-                            showUI()
-                        }
-                    )
-                    
-                    // Horizontal drag sensitivity
-                    SettingsItem(
-                        title = "Horizontal Sensitivity",
-                        value = "${String.format("%.3f", settings.horizontalPixelsPerMs)} px/ms",
-                        onClick = {
-                            tempInputValue = settings.horizontalPixelsPerMs.toString()
-                            showHorizontalPixelDialog = true
-                            showUI()
-                        }
-                    )
-                    
-                    // Vertical drag sensitivity
-                    SettingsItem(
-                        title = "Vertical Sensitivity",
-                        value = "${String.format("%.3f", settings.verticalPixelsPerMs)} px/ms",
-                        onClick = {
-                            tempInputValue = settings.verticalPixelsPerMs.toString()
-                            showVerticalPixelDialog = true
-                            showUI()
-                        }
-                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // Seek Throttle setting
+                        SettingsItem(
+                            title = "Seek Throttle",
+                            value = "${settings.seekThrottleMs} ms",
+                            onClick = {
+                                tempInputValue = settings.seekThrottleMs.toString()
+                                showSeekThrottleDialog = true
+                                showUI()
+                            }
+                        )
+                        
+                        // Horizontal drag sensitivity
+                        SettingsItem(
+                            title = "Horizontal Sensitivity",
+                            value = "${String.format("%.3f", settings.horizontalPixelsPerMs)} px/ms",
+                            onClick = {
+                                tempInputValue = settings.horizontalPixelsPerMs.toString()
+                                showHorizontalPixelDialog = true
+                                showUI()
+                            }
+                        )
+                        
+                        // Vertical drag sensitivity
+                        SettingsItem(
+                            title = "Vertical Sensitivity",
+                            value = "${String.format("%.3f", settings.verticalPixelsPerMs)} px/ms",
+                            onClick = {
+                                tempInputValue = settings.verticalPixelsPerMs.toString()
+                                showVerticalPixelDialog = true
+                                showUI()
+                            }
+                        )
+                    }
                 }
             }
         }
         
-        // GESTURE AREA - Rest of the screen for swipe gestures (placed AFTER top bar and settings panel)
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(top = 100.dp) // Leave space for top bar
-                .pointerInteropFilter { event ->
-                    when (event.action) {
-                        MotionEvent.ACTION_DOWN -> {
-                            touchStartX = event.x
-                            touchStartY = event.y
-                            startLongTapDetection()
-                            true
-                        }
-                        MotionEvent.ACTION_MOVE -> {
-                            if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
-                                when (checkForSwipeDirection(event.x, event.y)) {
-                                    "horizontal" -> startHorizontalSeeking(event.x)
-                                    "vertical" -> startVerticalSeeking(event.y)
-                                }
-                            } else if (isHorizontalSwipe) {
-                                handleHorizontalSeeking(event.x)
-                            } else if (isVerticalSwipe) {
-                                handleVerticalSeeking(event.y)
+        // GESTURE AREA - For swipe gestures (only when settings are closed)
+        if (!showSettings) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInteropFilter { event ->
+                        when (event.action) {
+                            MotionEvent.ACTION_DOWN -> {
+                                touchStartX = event.x
+                                touchStartY = event.y
+                                startLongTapDetection()
+                                true
                             }
-                            true
+                            MotionEvent.ACTION_MOVE -> {
+                                if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
+                                    when (checkForSwipeDirection(event.x, event.y)) {
+                                        "horizontal" -> startHorizontalSeeking(event.x)
+                                        "vertical" -> startVerticalSeeking(event.y)
+                                    }
+                                } else if (isHorizontalSwipe) {
+                                    handleHorizontalSeeking(event.x)
+                                } else if (isVerticalSwipe) {
+                                    handleVerticalSeeking(event.y)
+                                }
+                                true
+                            }
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                endTouch()
+                                true
+                            }
+                            else -> false
                         }
-                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                            endTouch()
-                            true
-                        }
-                        else -> false
                     }
-                }
-        )
+            )
+        }
         
-        // SEEKBAR - Bottom (only when UI visible)
-        if (uiVisible) {
+        // SEEKBAR - Bottom (only when UI visible and settings closed)
+        if (uiVisible && !showSettings) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1020,9 +1001,9 @@ fun SettingsInputDialog(
                 .width(300.dp)
                 .background(Color.DarkGray)
                 .padding(16.dp)
-                .pointerInteropFilter {
-                    // Consume all touches on dialog
-                    true
+                .clickable { 
+                    // Prevent clicks from passing through
+                    // This empty clickable consumes the touch
                 }
         ) {
             Column(
