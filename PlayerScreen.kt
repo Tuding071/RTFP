@@ -723,7 +723,7 @@ fun PlayerOverlay(
             }
         }
         
-        // SETTINGS PANEL - Appears below settings button
+        // SETTINGS PANEL - Appears below settings button (placed AFTER top bar but BEFORE gesture area)
         if (showSettings) {
             Box(
                 modifier = Modifier
@@ -732,15 +732,24 @@ fun PlayerOverlay(
                     .width(300.dp)
                     .background(Color.DarkGray.copy(alpha = 0.95f))
                     .pointerInteropFilter { 
-                        // Consume all touch events in settings panel
+                        // CONSUME ALL touch events in settings panel
                         when (it.action) {
-                            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP, MotionEvent.ACTION_MOVE -> true
-                            else -> false
+                            MotionEvent.ACTION_DOWN -> {
+                                // Don't pass to gesture area
+                                true
+                            }
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_MOVE -> {
+                                // Don't pass to gesture area
+                                true
+                            }
+                            else -> true
                         }
                     }
             ) {
                 Column(
-                    modifier = Modifier.padding(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     // Seek Throttle setting
@@ -779,7 +788,7 @@ fun PlayerOverlay(
             }
         }
         
-        // GESTURE AREA - Rest of the screen for swipe gestures (placed AFTER top bar)
+        // GESTURE AREA - Rest of the screen for swipe gestures (placed AFTER top bar and settings panel)
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -1011,6 +1020,10 @@ fun SettingsInputDialog(
                 .width(300.dp)
                 .background(Color.DarkGray)
                 .padding(16.dp)
+                .pointerInteropFilter {
+                    // Consume all touches on dialog
+                    true
+                }
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
