@@ -439,7 +439,7 @@ fun PlayerOverlay(
         }
         
         // Throttle MPV seeks to every 50ms (20fps) to balance performance and smoothness
-        if (now - lastSeekTime > 142) {
+        if (now - lastSeekTime > 20) {
             performSmoothSeek(clampedPosition)
             lastSeekTime = now
         }
