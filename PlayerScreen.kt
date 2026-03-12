@@ -7,12 +7,16 @@ import android.util.AttributeSet
 import android.util.Log
 import android.view.MotionEvent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.pointerInteropFilter
@@ -171,6 +175,13 @@ fun PlayerScreen(
     }
 }
 
+// Settings data class
+data class PlayerSettings(
+    var seekThrottleMs: Int = 50,
+    var horizontalPixelsPerMs: Float = 3f / 50f, // 3 pixels per 50ms = 0.06 pixels/ms
+    var verticalPixelsPerMs: Float = 3f / 50f
+)
+
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun PlayerOverlay(
@@ -193,15 +204,26 @@ fun PlayerOverlay(
     
     var isSeeking by remember { mutableStateOf(false) }
     var seekStartX by remember { mutableStateOf(0f) }
+    var seekStartY by remember { mutableStateOf(0f) }
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     var seekDirection by remember { mutableStateOf("") }
     var isSeekInProgress by remember { mutableStateOf(false) }
-    val seekThrottleMs = 16L
     
-    // NEW: Throttling for horizontal swipe
+    // Settings state
+    var showSettings by remember { mutableStateOf(false) }
+    var settings by remember { mutableStateOf(PlayerSettings()) }
+    
+    // Settings input dialog state
+    var showSeekThrottleDialog by remember { mutableStateOf(false) }
+    var showHorizontalPixelDialog by remember { mutableStateOf(false) }
+    var showVerticalPixelDialog by remember { mutableStateOf(false) }
+    var tempInputValue by remember { mutableStateOf("") }
+    
+    // NEW: Throttling for horizontal/vertical swipe
     var lastSeekTime by remember { mutableStateOf(0L) }
     var lastHorizontalUpdateTime by remember { mutableStateOf(0L) }
+    var lastVerticalUpdateTime by remember { mutableStateOf(0L) }
     
     var touchStartTime by remember { mutableStateOf(0L) }
     var touchStartX by remember { mutableStateOf(0f) }
@@ -216,7 +238,6 @@ fun PlayerOverlay(
     val verticalSwipeThreshold = 40f
     val maxVerticalMovement = 50f
     val maxHorizontalMovement = 50f
-    val quickSeekAmount = 5
     
     var showVideoInfo by remember { mutableStateOf(true) }
     var fileName by remember { mutableStateOf("RTFP") }
@@ -233,10 +254,10 @@ fun PlayerOverlay(
     var isDurationValid by remember { mutableStateOf(false) }
     
     // FIXED: Auto-hide seekbar with proper lifecycle - no more job leaks
-    LaunchedEffect(showSeekbar, userInteracting) {
-        if (showSeekbar && !userInteracting) {
+    LaunchedEffect(showSeekbar, userInteracting, showSettings) {
+        if (showSeekbar && !userInteracting && !showSettings) {
             delay(4000)
-            if (!userInteracting) {
+            if (!userInteracting && !showSettings) {
                 showSeekbar = false
                 showVideoInfo = false
             }
@@ -286,14 +307,26 @@ fun PlayerOverlay(
         }
     }
     
-    // For HORIZONTAL SWIPE - smooth seeking (frame-by-frame, no rounding) with 50ms throttle
-    fun performSmoothSeek(targetPosition: Double) {
+    // For HORIZONTAL SWIPE - smooth seeking with adjustable sensitivity
+    fun performHorizontalSmoothSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         isSeekInProgress = true
         // NO ROUNDING - smooth for horizontal swipe
         mpv.command("seek", targetPosition.toString(), "absolute", "exact")
         coroutineScope.launch {
-            delay(seekThrottleMs)
+            delay(settings.seekThrottleMs.toLong())
+            isSeekInProgress = false
+        }
+    }
+    
+    // For VERTICAL SWIPE - smooth seeking with adjustable sensitivity
+    fun performVerticalSmoothSeek(targetPosition: Double) {
+        if (isSeekInProgress) return
+        isSeekInProgress = true
+        // NO ROUNDING - smooth for vertical swipe
+        mpv.command("seek", targetPosition.toString(), "absolute", "exact")
+        coroutineScope.launch {
+            delay(settings.seekThrottleMs.toLong())
             isSeekInProgress = false
         }
     }
@@ -306,27 +339,13 @@ fun PlayerOverlay(
         val roundedPosition = (targetPosition + 0.5).toInt().toDouble()
         mpv.command("seek", roundedPosition.toString(), "absolute", "exact")
         coroutineScope.launch {
-            delay(seekThrottleMs)
+            delay(settings.seekThrottleMs.toLong())
             isSeekInProgress = false
         }
     }
     
     fun getFreshPosition(): Float {
         return (mpv.getPropertyDouble("time-pos") ?: 0.0).toFloat()
-    }
-    
-    fun performQuickSeek(seconds: Int) {
-        val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
-        val duration = mpv.getPropertyDouble("duration") ?: 0.0
-        
-        quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
-        showQuickSeekFeedback = true
-        coroutineScope.launch {
-            delay(1000)
-            showQuickSeekFeedback = false
-        }
-        
-        mpv.command("seek", seconds.toString(), "relative", "exact")
     }
     
     fun handleTap() {
@@ -401,26 +420,32 @@ fun PlayerOverlay(
         lastHorizontalUpdateTime = 0L
     }
     
-    fun startVerticalSwipe(startY: Float) {
+    fun startVerticalSeeking(startY: Float) {
         isVerticalSwipe = true
         cancelAutoHide()
-        val deltaY = startY - touchStartY
+        seekStartY = startY
+        seekStartPosition = mpv.getPropertyDouble("time-pos") ?: 0.0
+        wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
+        isSeeking = true
+        showSeekTime = true
+        showSeekbar = true
+        showVideoInfo = true
         
-        if (deltaY < 0) {
-            seekDirection = "+"
-            performQuickSeek(quickSeekAmount)
-        } else {
-            seekDirection = "-"
-            performQuickSeek(-quickSeekAmount)
+        if (wasPlayingBeforeSeek) {
+            mpv.setPropertyBoolean("pause", true)
         }
+        
+        // Reset throttling timers
+        lastSeekTime = 0L
+        lastVerticalUpdateTime = 0L
     }
     
     fun handleHorizontalSeeking(currentX: Float) {
         if (!isSeeking) return
         
         val deltaX = currentX - seekStartX
-        val pixelsPerSecond = 3f / 0.016f
-        val timeDeltaSeconds = deltaX / pixelsPerSecond
+        // Use adjustable pixel to time ratio
+        val timeDeltaSeconds = deltaX / settings.horizontalPixelsPerMs / 1000f
         val newPositionSeconds = seekStartPosition + timeDeltaSeconds
         val duration = mpv.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
@@ -438,9 +463,39 @@ fun PlayerOverlay(
             lastHorizontalUpdateTime = now
         }
         
-        // Throttle MPV seeks to every 50ms (20fps) to balance performance and smoothness
-        if (now - lastSeekTime > 16) {
-            performSmoothSeek(clampedPosition)
+        // Throttle MPV seeks to adjustable setting
+        if (now - lastSeekTime > settings.seekThrottleMs) {
+            performHorizontalSmoothSeek(clampedPosition)
+            lastSeekTime = now
+        }
+    }
+    
+    fun handleVerticalSeeking(currentY: Float) {
+        if (!isSeeking) return
+        
+        val deltaY = currentY - seekStartY
+        // Use adjustable pixel to time ratio (inverted: moving up increases time)
+        val timeDeltaSeconds = -deltaY / settings.verticalPixelsPerMs / 1000f
+        val newPositionSeconds = seekStartPosition + timeDeltaSeconds
+        val duration = mpv.getPropertyDouble("duration") ?: 0.0
+        val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
+        
+        seekDirection = if (deltaY < 0) "+" else "-"
+        seekTargetTime = formatTimeSimple(clampedPosition)
+        
+        val now = System.currentTimeMillis()
+        
+        // Update UI every 16ms (60fps) for smooth visual feedback
+        if (now - lastVerticalUpdateTime > 16) {
+            currentTime = formatTimeSimple(clampedPosition)
+            // UPDATE SEEKBAR POSITION IN REAL-TIME
+            seekbarPosition = clampedPosition.toFloat()
+            lastVerticalUpdateTime = now
+        }
+        
+        // Throttle MPV seeks to adjustable setting
+        if (now - lastSeekTime > settings.seekThrottleMs) {
+            performVerticalSmoothSeek(clampedPosition)
             lastSeekTime = now
         }
     }
@@ -448,7 +503,7 @@ fun PlayerOverlay(
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = mpv.getPropertyDouble("time-pos") ?: seekStartPosition
-            performSmoothSeek(currentPos)
+            performHorizontalSmoothSeek(currentPos)
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -466,8 +521,25 @@ fun PlayerOverlay(
         }
     }
     
-    fun endVerticalSwipe() {
-        isVerticalSwipe = false
+    fun endVerticalSeeking() {
+        if (isSeeking) {
+            val currentPos = mpv.getPropertyDouble("time-pos") ?: seekStartPosition
+            performVerticalSmoothSeek(currentPos)
+            
+            if (wasPlayingBeforeSeek) {
+                coroutineScope.launch {
+                    delay(100)
+                    mpv.setPropertyBoolean("pause", false)
+                }
+            }
+            
+            isSeeking = false
+            showSeekTime = false
+            seekStartY = 0f
+            seekStartPosition = 0.0
+            wasPlayingBeforeSeek = false
+            seekDirection = ""
+        }
     }
     
     fun endTouch() {
@@ -482,7 +554,7 @@ fun PlayerOverlay(
             endHorizontalSeeking()
             isHorizontalSwipe = false
         } else if (isVerticalSwipe) {
-            endVerticalSwipe()
+            endVerticalSeeking()
             isVerticalSwipe = false
         } else if (touchDuration < 150) {
             handleTap()
@@ -593,6 +665,77 @@ fun PlayerOverlay(
     val timeDisplayBackgroundAlpha = if (isSeeking || isDragging) 0.0f else 0.8f
     
     Box(modifier = modifier.fillMaxSize()) {
+        // Settings button
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 20.dp, end = 60.dp)
+                .background(Color.DarkGray.copy(alpha = 0.8f), shape = RoundedCornerShape(4.dp))
+                .clickable { 
+                    showSettings = !showSettings
+                    if (showSettings) {
+                        showSeekbar = true
+                        showVideoInfo = true
+                    }
+                }
+                .padding(horizontal = 16.dp, vertical = 6.dp)
+        ) {
+            Text(
+                text = "Settings",
+                style = TextStyle(
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            )
+        }
+        
+        // Settings panel
+        if (showSettings) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 60.dp, end = 60.dp)
+                    .width(250.dp)
+                    .background(Color.DarkGray.copy(alpha = 0.95f), shape = RoundedCornerShape(8.dp))
+                    .padding(16.dp)
+            ) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Seek Throttle setting
+                    SettingsItem(
+                        title = "Seek Throttle",
+                        value = "${settings.seekThrottleMs} ms",
+                        onClick = {
+                            tempInputValue = settings.seekThrottleMs.toString()
+                            showSeekThrottleDialog = true
+                        }
+                    )
+                    
+                    // Horizontal drag sensitivity
+                    SettingsItem(
+                        title = "Horizontal Sensitivity",
+                        value = "${String.format("%.2f", settings.horizontalPixelsPerMs)} px/ms",
+                        onClick = {
+                            tempInputValue = settings.horizontalPixelsPerMs.toString()
+                            showHorizontalPixelDialog = true
+                        }
+                    )
+                    
+                    // Vertical drag sensitivity
+                    SettingsItem(
+                        title = "Vertical Sensitivity",
+                        value = "${String.format("%.2f", settings.verticalPixelsPerMs)} px/ms",
+                        onClick = {
+                            tempInputValue = settings.verticalPixelsPerMs.toString()
+                            showVerticalPixelDialog = true
+                        }
+                    )
+                }
+            }
+        }
+        
         // Gesture area
         Box(modifier = Modifier.fillMaxSize()) {
             Box(
@@ -632,10 +775,12 @@ fun PlayerOverlay(
                                     if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
                                         when (checkForSwipeDirection(event.x, event.y)) {
                                             "horizontal" -> startHorizontalSeeking(event.x)
-                                            "vertical" -> startVerticalSwipe(event.y)
+                                            "vertical" -> startVerticalSeeking(event.y)
                                         }
                                     } else if (isHorizontalSwipe) {
                                         handleHorizontalSeeking(event.x)
+                                    } else if (isVerticalSwipe) {
+                                        handleVerticalSeeking(event.y)
                                     }
                                     true
                                 }
@@ -763,6 +908,171 @@ fun PlayerOverlay(
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
+            }
+        }
+        
+        // Settings input dialogs
+        if (showSeekThrottleDialog) {
+            SettingsInputDialog(
+                title = "Seek Throttle (ms)",
+                initialValue = tempInputValue,
+                onDismiss = { showSeekThrottleDialog = false },
+                onSave = { value ->
+                    value.toIntOrNull()?.let {
+                        settings = settings.copy(seekThrottleMs = it)
+                    }
+                    showSeekThrottleDialog = false
+                }
+            )
+        }
+        
+        if (showHorizontalPixelDialog) {
+            SettingsInputDialog(
+                title = "Horizontal Sensitivity (px/ms)",
+                initialValue = tempInputValue,
+                onDismiss = { showHorizontalPixelDialog = false },
+                onSave = { value ->
+                    value.toFloatOrNull()?.let {
+                        settings = settings.copy(horizontalPixelsPerMs = it)
+                    }
+                    showHorizontalPixelDialog = false
+                }
+            )
+        }
+        
+        if (showVerticalPixelDialog) {
+            SettingsInputDialog(
+                title = "Vertical Sensitivity (px/ms)",
+                initialValue = tempInputValue,
+                onDismiss = { showVerticalPixelDialog = false },
+                onSave = { value ->
+                    value.toFloatOrNull()?.let {
+                        settings = settings.copy(verticalPixelsPerMs = it)
+                    }
+                    showVerticalPixelDialog = false
+                }
+            )
+        }
+    }
+}
+
+@Composable
+fun SettingsItem(
+    title: String,
+    value: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(4.dp))
+            .clickable { onClick() }
+            .background(Color.Black.copy(alpha = 0.3f))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = title,
+            style = TextStyle(
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+        )
+        Text(
+            text = value,
+            style = TextStyle(
+                color = Color.White.copy(alpha = 0.8f),
+                fontSize = 14.sp
+            )
+        )
+    }
+}
+
+@Composable
+fun SettingsInputDialog(
+    title: String,
+    initialValue: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var inputText by remember { mutableStateOf(initialValue) }
+    
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.5f))
+            .clickable { onDismiss() }
+    ) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .width(300.dp)
+                .background(Color.DarkGray, shape = RoundedCornerShape(8.dp))
+                .padding(16.dp)
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = title,
+                    style = TextStyle(
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                )
+                
+                androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(8.dp))
+                
+                androidx.compose.foundation.text.BasicTextField(
+                    value = inputText,
+                    onValueChange = { inputText = it },
+                    textStyle = TextStyle(
+                        color = Color.White,
+                        fontSize = 16.sp
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.3f), shape = RoundedCornerShape(4.dp))
+                        .padding(12.dp)
+                )
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color.Gray)
+                            .clickable { onDismiss() }
+                            .padding(vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = "Cancel",
+                            color = Color.White,
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
+                    
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color.White)
+                            .clickable { onSave(inputText) }
+                            .padding(vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = "Save",
+                            color = Color.Black,
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
+                }
             }
         }
     }
