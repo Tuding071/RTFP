@@ -50,7 +50,7 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         mpv.setOptionString("untimed", "yes")
         
         // Seeking
-        mpv.setOptionString("hr-seek", "yes")
+        mpv.setOptionString("hr-seek", "no")
         mpv.setOptionString("hr-seek-framedrop", "no")
         
         // Fast decoding
