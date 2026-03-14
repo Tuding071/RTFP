@@ -193,6 +193,9 @@ fun PlayerOverlay(
     var showVideoInfo by remember { mutableStateOf(true) }
     var fileName by remember { mutableStateOf("RTFP") }
     
+    // ADDED: Missing showSeekTime declaration
+    var showSeekTime by remember { mutableStateOf(false) }
+    
     // Drag state - ONLY FOR SEEKBAR AREA
     var isDraggingSeekbar by remember { mutableStateOf(false) }
     var hasCrossedDeadzone by remember { mutableStateOf(false) }
@@ -222,7 +225,13 @@ fun PlayerOverlay(
     var isLongTap by remember { mutableStateOf(false) }
     var isSpeedingUp by remember { mutableStateOf(false) }
     
-    // Thresholds (ORIGINAL)
+    // Feedback states
+    var showPlaybackFeedback by remember { mutableStateOf(false) }
+    var playbackFeedbackText by remember { mutableStateOf("") }
+    var showQuickSeekFeedback by remember { mutableStateOf(false) }
+    var quickSeekFeedbackText by remember { mutableStateOf("") }
+    
+    // Thresholds
     val deadzoneThresholdPx = with(density) { 25.dp.toPx() }
     val longTapThreshold = 300L
     val horizontalSwipeThreshold = 30f
@@ -231,14 +240,19 @@ fun PlayerOverlay(
     val maxHorizontalMovement = 50f
     val quickSeekAmount = 5
     
-    // Throttle (UPDATED to 33ms)
+    // Throttle (33ms as requested)
     val seekThrottleMs = 33L
     
-    // Feedback states (ORIGINAL)
-    var showPlaybackFeedback by remember { mutableStateOf(false) }
-    var playbackFeedbackText by remember { mutableStateOf("") }
-    var showQuickSeekFeedback by remember { mutableStateOf(false) }
-    var quickSeekFeedbackText by remember { mutableStateOf("") }
+    // ============= MOVED UP: performQuickSeek (defined BEFORE it's used) =============
+    fun performQuickSeek(seconds: Int) {
+        quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
+        showQuickSeekFeedback = true
+        coroutineScope.launch {
+            delay(1000)
+            showQuickSeekFeedback = false
+        }
+        mpv.command("seek", seconds.toString(), "relative", "exact")
+    }
     
     // Wait for valid duration
     LaunchedEffect(Unit) {
@@ -262,7 +276,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Update time when not seeking/dragging (ORIGINAL but includes isDraggingSeekbar)
+    // Update time when not seeking/dragging
     LaunchedEffect(Unit) {
         while (isActive) {
             if (!isSeeking && !isDraggingSeekbar) {
@@ -274,7 +288,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Get filename (ORIGINAL)
+    // Get filename
     LaunchedEffect(Unit) {
         val intent = (context as? android.app.Activity)?.intent
         fileName = when {
@@ -293,12 +307,12 @@ fun PlayerOverlay(
         showSeekbar = true
     }
     
-    // Speed control (ORIGINAL)
+    // Speed control
     LaunchedEffect(isSpeedingUp) {
         mpv.setPropertyDouble("speed", if (isSpeedingUp) 2.0 else 1.0)
     }
     
-    // ============= ORIGINAL HORIZONTAL SWIPE FUNCTIONS (UNCHANGED) =============
+    // ============= ORIGINAL HORIZONTAL SWIPE FUNCTIONS =============
     fun performSmoothSeek(targetPosition: Double) {
         if (isSeeking) return
         isSeeking = true
@@ -376,7 +390,7 @@ fun PlayerOverlay(
         }
     }
     
-    // ============= ORIGINAL VERTICAL SWIPE FUNCTIONS (UNCHANGED) =============
+    // ============= VERTICAL SWIPE FUNCTIONS (NOW AFTER performQuickSeek) =============
     fun startVerticalSwipe(startY: Float) {
         isVerticalSwipe = true
         val deltaY = startY - touchStartY
@@ -392,7 +406,7 @@ fun PlayerOverlay(
         isVerticalSwipe = false
     }
     
-    // ============= NEW SEEKBAR DRAG LOGIC (REPLACES OLD PROGRESS BAR LOGIC) =============
+    // ============= NEW SEEKBAR DRAG LOGIC =============
     
     /**
      * Calculates how many pixels the user must drag to trigger a 1-second seek
@@ -546,7 +560,7 @@ fun PlayerOverlay(
         }
     }
     
-    // ============= ORIGINAL TOUCH HANDLING (UNCHANGED EXCEPT FOR INTEGRATION) =============
+    // ============= ORIGINAL TOUCH HANDLING =============
     
     fun checkForSwipeDirection(currentX: Float, currentY: Float): String {
         if (isHorizontalSwipe || isVerticalSwipe || isLongTap || isDraggingSeekbar) return ""
@@ -626,17 +640,16 @@ fun PlayerOverlay(
         isLongTap = false
     }
     
-    fun performQuickSeek(seconds: Int) {
-        quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
-        showQuickSeekFeedback = true
+    fun showPlaybackFeedback(text: String) {
+        showPlaybackFeedback = true
+        playbackFeedbackText = text
         coroutineScope.launch {
             delay(1000)
-            showQuickSeekFeedback = false
+            showPlaybackFeedback = false
         }
-        mpv.command("seek", seconds.toString(), "relative", "exact")
     }
     
-    // Alpha values for UI elements (ORIGINAL)
+    // Alpha values for UI elements
     val videoInfoTextAlpha = if (isSeeking || isDraggingSeekbar) 0.0f else 1.0f
     val videoInfoBackgroundAlpha = if (isSeeking || isDraggingSeekbar) 0.0f else 0.8f
     val timeDisplayTextAlpha = if (isSeeking || isDraggingSeekbar) 0.0f else 1.0f
@@ -645,7 +658,7 @@ fun PlayerOverlay(
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val screenWidth = constraints.maxWidth.toFloat()
         
-        // Full screen gesture area (ORIGINAL - UNCHANGED)
+        // Full screen gesture area
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -677,7 +690,7 @@ fun PlayerOverlay(
                 }
         )
         
-        // Seekbar Area (BOTTOM) - NOW WITH NEW DRAG LOGIC
+        // Seekbar Area (BOTTOM) - WITH NEW DRAG LOGIC
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -691,7 +704,7 @@ fun PlayerOverlay(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Time display (ORIGINAL)
+                    // Time display
                     Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
                         Row(
                             modifier = Modifier.align(Alignment.CenterStart),
@@ -780,7 +793,7 @@ fun PlayerOverlay(
             }
         }
         
-        // Video title (ORIGINAL)
+        // Video title
         if (showVideoInfo) {
             Text(
                 text = fileName,
@@ -797,7 +810,7 @@ fun PlayerOverlay(
             )
         }
         
-        // Feedback displays (ORIGINAL)
+        // Feedback displays
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 isSpeedingUp -> Text(
@@ -825,7 +838,7 @@ fun PlayerOverlay(
     }
 }
 
-// Utility functions (UNCHANGED)
+// Utility functions
 private fun formatTimeSimple(seconds: Double): String {
     val totalSeconds = seconds.toInt()
     val hours = totalSeconds / 3600
