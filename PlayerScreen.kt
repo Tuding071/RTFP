@@ -192,8 +192,6 @@ fun PlayerOverlay(
     var showSeekbar by remember { mutableStateOf(true) }
     var showVideoInfo by remember { mutableStateOf(true) }
     var fileName by remember { mutableStateOf("RTFP") }
-    
-    // ADDED: Missing showSeekTime declaration
     var showSeekTime by remember { mutableStateOf(false) }
     
     // Drag state - ONLY FOR SEEKBAR AREA
@@ -206,7 +204,7 @@ fun PlayerOverlay(
     var lastSeekedSecond by remember { mutableStateOf(0) }
     var dragStartX by remember { mutableStateOf(0f) }
     
-    // Full screen gesture states (ORIGINAL - UNCHANGED)
+    // Full screen gesture states
     var isHorizontalSwipe by remember { mutableStateOf(false) }
     var isVerticalSwipe by remember { mutableStateOf(false) }
     var isSeeking by remember { mutableStateOf(false) }
@@ -217,7 +215,7 @@ fun PlayerOverlay(
     var lastSeekTime by remember { mutableStateOf(0L) }
     var lastHorizontalUpdateTime by remember { mutableStateOf(0L) }
     
-    // Touch tracking (ORIGINAL)
+    // Touch tracking
     var touchStartX by remember { mutableStateOf(0f) }
     var touchStartY by remember { mutableStateOf(0f) }
     var touchStartTime by remember { mutableStateOf(0L) }
@@ -240,19 +238,8 @@ fun PlayerOverlay(
     val maxHorizontalMovement = 50f
     val quickSeekAmount = 5
     
-    // Throttle (33ms as requested)
+    // Throttle
     val seekThrottleMs = 33L
-    
-    // ============= MOVED UP: performQuickSeek (defined BEFORE it's used) =============
-    fun performQuickSeek(seconds: Int) {
-        quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
-        showQuickSeekFeedback = true
-        coroutineScope.launch {
-            delay(1000)
-            showQuickSeekFeedback = false
-        }
-        mpv.command("seek", seconds.toString(), "relative", "exact")
-    }
     
     // Wait for valid duration
     LaunchedEffect(Unit) {
@@ -265,7 +252,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Auto-hide seekbar (ORIGINAL)
+    // Auto-hide seekbar
     LaunchedEffect(showSeekbar, isDraggingSeekbar, isHorizontalSwipe, isVerticalSwipe) {
         if (showSeekbar && !isDraggingSeekbar && !isHorizontalSwipe && !isVerticalSwipe) {
             delay(4000)
@@ -312,7 +299,27 @@ fun PlayerOverlay(
         mpv.setPropertyDouble("speed", if (isSpeedingUp) 2.0 else 1.0)
     }
     
-    // ============= ORIGINAL HORIZONTAL SWIPE FUNCTIONS =============
+    // ============= HELPER FUNCTIONS (Defined first) =============
+    fun showPlaybackFeedback(text: String) {
+        showPlaybackFeedback = true
+        playbackFeedbackText = text
+        coroutineScope.launch {
+            delay(1000)
+            showPlaybackFeedback = false
+        }
+    }
+    
+    fun performQuickSeek(seconds: Int) {
+        quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
+        showQuickSeekFeedback = true
+        coroutineScope.launch {
+            delay(1000)
+            showQuickSeekFeedback = false
+        }
+        mpv.command("seek", seconds.toString(), "relative", "exact")
+    }
+    
+    // ============= HORIZONTAL SWIPE FUNCTIONS =============
     fun performSmoothSeek(targetPosition: Double) {
         if (isSeeking) return
         isSeeking = true
@@ -390,7 +397,7 @@ fun PlayerOverlay(
         }
     }
     
-    // ============= VERTICAL SWIPE FUNCTIONS (NOW AFTER performQuickSeek) =============
+    // ============= VERTICAL SWIPE FUNCTIONS =============
     fun startVerticalSwipe(startY: Float) {
         isVerticalSwipe = true
         val deltaY = startY - touchStartY
@@ -407,11 +414,6 @@ fun PlayerOverlay(
     }
     
     // ============= NEW SEEKBAR DRAG LOGIC =============
-    
-    /**
-     * Calculates how many pixels the user must drag to trigger a 1-second seek
-     * Formula: thresholdPixels = totalTouchAreaWidth / videoDurationInSeconds
-     */
     fun calculatePixelThreshold(touchAreaWidth: Float): Float {
         return if (videoDuration > 0) {
             touchAreaWidth / videoDuration.toFloat()
@@ -420,9 +422,6 @@ fun PlayerOverlay(
         }
     }
     
-    /**
-     * Start dragging on seekbar
-     */
     fun startSeekbarDrag(startX: Float, seekbarWidth: Float) {
         isDraggingSeekbar = true
         hasCrossedDeadzone = false
@@ -431,43 +430,32 @@ fun PlayerOverlay(
         wasPlayingBeforeDrag = mpv.getPropertyBoolean("pause") == false
         dragStartX = startX
         
-        // Store the current second
         lastSeekedSecond = (dragStartPosition + 0.5).toInt()
         dragTargetTime = formatTimeSimple(dragStartPosition)
         
-        // Show UI
         showSeekbar = true
         showVideoInfo = true
         showSeekTime = true
         
-        // Pause if playing
         if (wasPlayingBeforeDrag) {
             mpv.setPropertyBoolean("pause", true)
         }
         
-        // Reset throttle
         lastSeekTime = 0L
     }
     
-    /**
-     * Handle seekbar drag with two thresholds:
-     * 1. Deadzone threshold (25dp) - prevents accidental seeks on tap
-     * 2. Dynamic threshold - controls 1-second seek sensitivity based on video duration
-     */
     fun handleSeekbarDrag(currentX: Float, seekbarWidth: Float) {
         if (!isDraggingSeekbar) return
         
         val deltaX = currentX - dragStartX
         val totalDragDistance = abs(deltaX)
         
-        // FIRST THRESHOLD: Deadzone
         if (!hasCrossedDeadzone) {
             if (totalDragDistance > deadzoneThresholdPx) {
                 hasCrossedDeadzone = true
                 dragAccumulatedPixels = 0f
                 dragStartX = currentX - (deadzoneThresholdPx * sign(deltaX))
             } else {
-                // Still in deadzone, update progress bar visually
                 val threshold = calculatePixelThreshold(seekbarWidth)
                 val previewPosition = dragStartPosition + (deltaX / threshold)
                 seekbarPosition = previewPosition.toFloat().coerceIn(0f, videoDuration.toFloat())
@@ -476,9 +464,7 @@ fun PlayerOverlay(
             }
         }
         
-        // SECOND THRESHOLD: Dynamic threshold for actual seeking
         val threshold = calculatePixelThreshold(seekbarWidth)
-        
         val movementDelta = currentX - dragStartX
         dragAccumulatedPixels += movementDelta
         dragStartX = currentX
@@ -506,16 +492,12 @@ fun PlayerOverlay(
             }
         }
         
-        // Update progress bar position smoothly
         val newPosition = (lastSeekedSecond + (dragAccumulatedPixels / threshold)).toDouble()
             .coerceIn(0.0, videoDuration)
         seekbarPosition = newPosition.toFloat()
         currentTime = formatTimeSimple(newPosition)
     }
     
-    /**
-     * Finish seekbar drag
-     */
     fun finishSeekbarDrag() {
         if (isDraggingSeekbar) {
             val finalPosition = lastSeekedSecond.toDouble()
@@ -536,9 +518,6 @@ fun PlayerOverlay(
         }
     }
     
-    /**
-     * Cancel seekbar drag
-     */
     fun cancelSeekbarDrag() {
         if (isDraggingSeekbar) {
             mpv.command("seek", dragStartPosition.toString(), "absolute", "exact")
@@ -560,8 +539,7 @@ fun PlayerOverlay(
         }
     }
     
-    // ============= ORIGINAL TOUCH HANDLING =============
-    
+    // ============= TOUCH HANDLING =============
     fun checkForSwipeDirection(currentX: Float, currentY: Float): String {
         if (isHorizontalSwipe || isVerticalSwipe || isLongTap || isDraggingSeekbar) return ""
         
@@ -640,16 +618,7 @@ fun PlayerOverlay(
         isLongTap = false
     }
     
-    fun showPlaybackFeedback(text: String) {
-        showPlaybackFeedback = true
-        playbackFeedbackText = text
-        coroutineScope.launch {
-            delay(1000)
-            showPlaybackFeedback = false
-        }
-    }
-    
-    // Alpha values for UI elements
+    // Alpha values
     val videoInfoTextAlpha = if (isSeeking || isDraggingSeekbar) 0.0f else 1.0f
     val videoInfoBackgroundAlpha = if (isSeeking || isDraggingSeekbar) 0.0f else 0.8f
     val timeDisplayTextAlpha = if (isSeeking || isDraggingSeekbar) 0.0f else 1.0f
@@ -690,7 +659,7 @@ fun PlayerOverlay(
                 }
         )
         
-        // Seekbar Area (BOTTOM) - WITH NEW DRAG LOGIC
+        // Seekbar Area
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -724,13 +693,13 @@ fun PlayerOverlay(
                         }
                     }
                     
-                    // Progress Bar with NEW drag handling
+                    // Progress Bar with drag handling
                     Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
                         if (videoDuration > 1.0) {
                             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                                 val seekbarWidth = constraints.maxWidth.toFloat()
                                 
-                                // Progress bar visual (passive)
+                                // Progress bar visual
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -747,7 +716,7 @@ fun PlayerOverlay(
                                         .background(Color.White)
                                 )
                                 
-                                // Touch area for seekbar drag (ACTIVE)
+                                // Touch area
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
