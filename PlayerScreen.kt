@@ -288,90 +288,8 @@ fun PlayerOverlay(
         mpv.setPropertyDouble("speed", if (isSpeedingUp) 2.0 else 1.0)
     }
     
-    // Helper functions
-    fun showSeekbarWithTimeout() {
-        showSeekbar = true
-        showVideoInfo = true
-    }
-    
-    fun showPlaybackFeedback(text: String) {
-        showPlaybackFeedback = true
-        playbackFeedbackText = text
-        coroutineScope.launch {
-            delay(1000)
-            showPlaybackFeedback = false
-        }
-    }
-    
-    fun performQuickSeek(seconds: Int) {
-        val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
-        val duration = mpv.getPropertyDouble("duration") ?: 0.0
-        
-        quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
-        showQuickSeekFeedback = true
-        coroutineScope.launch {
-            delay(1000)
-            showQuickSeekFeedback = false
-        }
-        
-        mpv.command("seek", seconds.toString(), "relative", "exact")
-    }
-    
-    fun handleTap() {
-        val currentPaused = mpv.getPropertyBoolean("pause") ?: false
-        if (currentPaused) {
-            coroutineScope.launch {
-                val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
-                mpv.command("seek", currentPos.toString(), "absolute", "exact")
-                delay(100)
-                mpv.setPropertyBoolean("pause", false)
-            }
-            showPlaybackFeedback("Resume")
-        } else {
-            mpv.setPropertyBoolean("pause", true)
-            showPlaybackFeedback("Pause")
-        }
-        
-        if (showSeekbar) {
-            showSeekbar = false
-            showVideoInfo = false
-        } else {
-            showSeekbarWithTimeout()
-        }
-    }
-    
-    fun startLongTapDetection() {
-        isTouching = true
-        touchStartTime = System.currentTimeMillis()
-        coroutineScope.launch {
-            delay(longTapThreshold)
-            if (isTouching && !isDragging) {
-                isLongTap = true
-                isSpeedingUp = true
-            }
-        }
-    }
-    
-    fun endTouch() {
-        val touchDuration = System.currentTimeMillis() - touchStartTime
-        isTouching = false
-        
-        if (isLongTap) {
-            isLongTap = false
-            isSpeedingUp = false
-        } else if (!isDragging && touchDuration < 150) {
-            handleTap()
-        }
-        
-        // If we were dragging, finish it
-        if (isDragging) {
-            finishDragging()
-        }
-        
-        isLongTap = false
-    }
-    
     // ============= UNIFIED DRAG SEEKING LOGIC =============
+    // MOVED UP HERE - Defined before any functions that use them
     
     /**
      * Calculates how many pixels the user must drag to trigger a 1-second seek
@@ -540,6 +458,89 @@ fun PlayerOverlay(
         }
     }
     // ============= END UNIFIED DRAG LOGIC =============
+    
+    // Helper functions (now defined AFTER the drag functions they use)
+    fun showSeekbarWithTimeout() {
+        showSeekbar = true
+        showVideoInfo = true
+    }
+    
+    fun showPlaybackFeedback(text: String) {
+        showPlaybackFeedback = true
+        playbackFeedbackText = text
+        coroutineScope.launch {
+            delay(1000)
+            showPlaybackFeedback = false
+        }
+    }
+    
+    fun performQuickSeek(seconds: Int) {
+        val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
+        val duration = mpv.getPropertyDouble("duration") ?: 0.0
+        
+        quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
+        showQuickSeekFeedback = true
+        coroutineScope.launch {
+            delay(1000)
+            showQuickSeekFeedback = false
+        }
+        
+        mpv.command("seek", seconds.toString(), "relative", "exact")
+    }
+    
+    fun handleTap() {
+        val currentPaused = mpv.getPropertyBoolean("pause") ?: false
+        if (currentPaused) {
+            coroutineScope.launch {
+                val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
+                mpv.command("seek", currentPos.toString(), "absolute", "exact")
+                delay(100)
+                mpv.setPropertyBoolean("pause", false)
+            }
+            showPlaybackFeedback("Resume")
+        } else {
+            mpv.setPropertyBoolean("pause", true)
+            showPlaybackFeedback("Pause")
+        }
+        
+        if (showSeekbar) {
+            showSeekbar = false
+            showVideoInfo = false
+        } else {
+            showSeekbarWithTimeout()
+        }
+    }
+    
+    fun startLongTapDetection() {
+        isTouching = true
+        touchStartTime = System.currentTimeMillis()
+        coroutineScope.launch {
+            delay(longTapThreshold)
+            if (isTouching && !isDragging) {
+                isLongTap = true
+                isSpeedingUp = true
+            }
+        }
+    }
+    
+    fun endTouch() {
+        val touchDuration = System.currentTimeMillis() - touchStartTime
+        isTouching = false
+        
+        if (isLongTap) {
+            isLongTap = false
+            isSpeedingUp = false
+        } else if (!isDragging && touchDuration < 150) {
+            handleTap()
+        }
+        
+        // If we were dragging, finish it
+        if (isDragging) {
+            finishDragging() // Now this is defined above!
+        }
+        
+        isLongTap = false
+    }
     
     // Alpha values for UI elements during drag
     val uiAlpha = if (isDragging) 0f else 1f
