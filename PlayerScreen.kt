@@ -180,6 +180,7 @@ fun PlayerOverlay(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val density = LocalDensity.current
     
     // Core state
     var currentTime by remember { mutableStateOf("00:00") }
@@ -194,11 +195,13 @@ fun PlayerOverlay(
     
     // Drag state - UNIFIED for both progress bar and swipe
     var isDragging by remember { mutableStateOf(false) }
+    var hasCrossedDeadzone by remember { mutableStateOf(false) }
     var dragAccumulatedPixels by remember { mutableStateOf(0f) }
     var dragStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeDrag by remember { mutableStateOf(false) }
     var dragTargetTime by remember { mutableStateOf("00:00") }
     var lastSeekedSecond by remember { mutableStateOf(0) }
+    var dragStartX by remember { mutableStateOf(0f) }
     
     // Throttling
     var lastSeekTime by remember { mutableStateOf(0L) }
@@ -207,11 +210,13 @@ fun PlayerOverlay(
     // Touch tracking for swipe
     var touchStartX by remember { mutableStateOf(0f) }
     var touchStartY by remember { mutableStateOf(0f) }
+    var touchStartTime by remember { mutableStateOf(0L) }
     var isTouching by remember { mutableStateOf(false) }
     var isLongTap by remember { mutableStateOf(false) }
     var isSpeedingUp by remember { mutableStateOf(false) }
     
-    // Constants
+    // Thresholds
+    val deadzoneThresholdPx = with(density) { 25.dp.toPx() }
     val longTapThreshold = 300L
     val horizontalSwipeThreshold = 30f
     val verticalSwipeThreshold = 40f
@@ -367,22 +372,16 @@ fun PlayerOverlay(
     }
     
     // ============= UNIFIED DRAG SEEKING LOGIC =============
-    // This is the key part - dynamic threshold based on video duration
     
     /**
      * Calculates how many pixels the user must drag to trigger a 1-second seek
      * Formula: thresholdPixels = totalTouchAreaWidth / videoDurationInSeconds
-     * 
-     * Examples with 1000px wide touch area:
-     * - 1000s video → 1px per second (very sensitive)
-     * - 100s video → 10px per second
-     * - 10s video → 100px per second (less sensitive)
      */
     fun calculatePixelThreshold(touchAreaWidth: Float): Float {
         return if (videoDuration > 0) {
             touchAreaWidth / videoDuration.toFloat()
         } else {
-            Float.MAX_VALUE // No threshold if duration unknown
+            Float.MAX_VALUE
         }
     }
     
@@ -391,9 +390,11 @@ fun PlayerOverlay(
      */
     fun startDragging(startX: Float, touchAreaWidth: Float) {
         isDragging = true
+        hasCrossedDeadzone = false
         dragAccumulatedPixels = 0f
         dragStartPosition = mpv.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeDrag = mpv.getPropertyBoolean("pause") == false
+        dragStartX = startX
         
         // Store the current second we're at for tracking
         lastSeekedSecond = (dragStartPosition + 0.5).toInt()
@@ -413,18 +414,41 @@ fun PlayerOverlay(
     }
     
     /**
-     * Handle drag movement with dynamic threshold
+     * Handle drag movement with two thresholds:
+     * 1. Deadzone threshold (25dp) - prevents accidental seeks on tap
+     * 2. Dynamic threshold - controls 1-second seek sensitivity based on video duration
      */
     fun handleDrag(currentX: Float, touchAreaWidth: Float) {
         if (!isDragging) return
         
-        // Calculate movement since last update
-        val deltaX = currentX - touchStartX
+        val deltaX = currentX - dragStartX
+        val totalDragDistance = abs(deltaX)
+        
+        // FIRST THRESHOLD: Deadzone - prevent immediate seeking on touch
+        if (!hasCrossedDeadzone) {
+            if (totalDragDistance > deadzoneThresholdPx) {
+                hasCrossedDeadzone = true
+                // Reset accumulator at deadzone crossing point
+                dragAccumulatedPixels = 0f
+                // Update dragStartX to deadzone crossing point for accurate accumulation
+                dragStartX = currentX - (deadzoneThresholdPx * sign(deltaX))
+            } else {
+                // Still in deadzone, just update progress bar position for visual feedback
+                val threshold = calculatePixelThreshold(touchAreaWidth)
+                val previewPosition = dragStartPosition + (deltaX / threshold)
+                seekbarPosition = previewPosition.toFloat().coerceIn(0f, videoDuration.toFloat())
+                currentTime = formatTimeSimple(seekbarPosition.toDouble())
+                return
+            }
+        }
+        
+        // SECOND THRESHOLD: Dynamic threshold for actual seeking
         val threshold = calculatePixelThreshold(touchAreaWidth)
         
-        // Accumulate pixels moved
-        dragAccumulatedPixels += deltaX
-        touchStartX = currentX // Reset for next update
+        // Calculate movement since deadzone crossing
+        val movementDelta = currentX - dragStartX
+        dragAccumulatedPixels += movementDelta
+        dragStartX = currentX // Reset for next update
         
         // Calculate how many full thresholds we've crossed
         val thresholdCrossings = (dragAccumulatedPixels / threshold).toInt()
@@ -456,9 +480,6 @@ fun PlayerOverlay(
                     dragAccumulatedPixels -= (secondsToSeek * threshold)
                 }
             }
-            
-            // If we accumulated more than threshold but throttled prevented seek,
-            // keep the accumulator but don't reset it
         }
         
         // Always update progress bar position for smooth visual feedback
@@ -487,6 +508,7 @@ fun PlayerOverlay(
             
             // Reset drag state
             isDragging = false
+            hasCrossedDeadzone = false
             dragAccumulatedPixels = 0f
             wasPlayingBeforeDrag = false
         }
@@ -512,6 +534,7 @@ fun PlayerOverlay(
             
             // Reset drag state
             isDragging = false
+            hasCrossedDeadzone = false
             dragAccumulatedPixels = 0f
             wasPlayingBeforeDrag = false
         }
@@ -521,7 +544,10 @@ fun PlayerOverlay(
     // Alpha values for UI elements during drag
     val uiAlpha = if (isDragging) 0f else 1f
     
-    Box(modifier = modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val screenWidth = constraints.maxWidth.toFloat()
+        val screenHeight = constraints.maxHeight.toFloat()
+        
         // Full screen gesture area (for swipe, long press, tap)
         Box(
             modifier = Modifier
@@ -531,6 +557,7 @@ fun PlayerOverlay(
                         MotionEvent.ACTION_DOWN -> {
                             touchStartX = event.x
                             touchStartY = event.y
+                            touchStartTime = System.currentTimeMillis()
                             startLongTapDetection()
                             true
                         }
@@ -544,8 +571,7 @@ fun PlayerOverlay(
                                     deltaX > deltaY && 
                                     deltaY < maxVerticalMovement) {
                                     // Start horizontal drag (using progress bar logic)
-                                    // We need the screen width for threshold calculation
-                                    startDragging(event.x, width.toFloat())
+                                    startDragging(event.x, screenWidth)
                                 } else if (deltaY > verticalSwipeThreshold && 
                                          deltaY > deltaX && 
                                          deltaX < maxHorizontalMovement) {
@@ -558,7 +584,7 @@ fun PlayerOverlay(
                                     }
                                 }
                             } else if (isDragging) {
-                                handleDrag(event.x, width.toFloat())
+                                handleDrag(event.x, screenWidth)
                             }
                             true
                         }
@@ -593,7 +619,7 @@ fun PlayerOverlay(
                         Text(
                             text = "$currentTime / $totalTime",
                             style = TextStyle(
-                                color = Color.White.copy(alpha = uiAlpha),
+                                color = Color.White.copy(alpha = if (isDragging) 0f else 1f),
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Medium
                             ),
@@ -607,23 +633,24 @@ fun PlayerOverlay(
                 // Progress Bar with direct drag handling
                 Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
                     if (videoDuration > 1.0) {
-                        DynamicThresholdProgressBar(
-                            position = seekbarPosition,
-                            duration = videoDuration.toFloat(),
-                            onDragStart = { xPosition ->
-                                // Get the box's width for threshold calculation
-                                val boxWidth = this@Box.size.width
-                                touchStartX = xPosition // Store for drag tracking
-                                startDragging(xPosition, boxWidth)
-                            },
-                            onDrag = { xPosition ->
-                                val boxWidth = this@Box.size.width
-                                handleDrag(xPosition, boxWidth)
-                            },
-                            onDragEnd = { finishDragging() },
-                            onDragCancel = { cancelDragging() },
-                            modifier = Modifier.fillMaxSize().height(48.dp)
-                        )
+                        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                            val progressBarWidth = constraints.maxWidth.toFloat()
+                            
+                            DynamicThresholdProgressBar(
+                                position = seekbarPosition,
+                                duration = videoDuration.toFloat(),
+                                onDragStart = { xPosition ->
+                                    dragStartX = xPosition
+                                    startDragging(xPosition, progressBarWidth)
+                                },
+                                onDrag = { xPosition ->
+                                    handleDrag(xPosition, progressBarWidth)
+                                },
+                                onDragEnd = { finishDragging() },
+                                onDragCancel = { cancelDragging() },
+                                modifier = Modifier.fillMaxSize().height(48.dp)
+                            )
+                        }
                     } else {
                         // Loading state
                         Box(modifier = Modifier.fillMaxSize()) {
@@ -751,7 +778,7 @@ fun DynamicThresholdProgressBar(
     }
 }
 
-// Utility functions (keep as is)
+// Utility functions
 private fun formatTimeSimple(seconds: Double): String {
     val totalSeconds = seconds.toInt()
     val hours = totalSeconds / 3600
