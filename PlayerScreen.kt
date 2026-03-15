@@ -339,6 +339,10 @@ fun PlayerOverlay(
         showSeekbar = true
         showVideoInfo = true
         
+        // Set initial target time (like seekbar seeking)
+        seekTargetTime = formatTimeSimple(seekStartPosition)
+        seekDirection = ""
+        
         if (wasPlayingBeforeDrag) {
             mpv.setPropertyBoolean("pause", true)
         }
@@ -359,10 +363,6 @@ fun PlayerOverlay(
         
         val now = System.currentTimeMillis()
         
-        // ORIGINAL BEHAVIOR: Just update target time directly (continuous updating)
-        seekTargetTime = formatTimeSimple(clampedPosition)
-        seekDirection = if (deltaX > 0) "+" else "-"
-        
         // Update UI smoothly (progress bar and current time display)
         if (now - lastHorizontalUpdateTime > 16) {
             currentTime = formatTimeSimple(clampedPosition)
@@ -370,9 +370,11 @@ fun PlayerOverlay(
             lastHorizontalUpdateTime = now
         }
         
-        // Perform seek with throttling
+        // Perform seek with throttling - ONLY update feedback time when seek happens (like seekbar seeking)
         if (now - lastSeekTime > seekThrottleMs) {
             performSmoothSeek(clampedPosition)
+            seekTargetTime = formatTimeSimple(clampedPosition)
+            seekDirection = if (deltaX > 0) "+" else "-"
             lastSeekTime = now
         }
     }
@@ -488,7 +490,7 @@ fun PlayerOverlay(
                     
                     lastSeekedSecond = clampedSecond
                     
-                    // Update target time when second changes
+                    // Update target time when threshold crossed (seek happens)
                     dragTargetTime = formatTimeSimple(clampedSecond.toDouble())
                     
                     dragAccumulatedPixels -= (secondsToSeek * threshold)
@@ -790,7 +792,7 @@ fun PlayerOverlay(
             )
         }
         
-        // Feedback displays - CENTER TIME SHOWS TARGET TIME (original behavior)
+        // Feedback displays - CENTER TIME ONLY UPDATES WHEN SEEK HAPPENS (like seekbar seeking)
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 isSpeedingUp -> Text(
