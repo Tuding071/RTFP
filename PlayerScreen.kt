@@ -240,7 +240,7 @@ fun PlayerOverlay(
     
     // Throttle
     val seekThrottleMs = 33L
-    val uiUpdateThrottleMs = 16L  // 60fps for UI updates (like old code)
+    val uiUpdateThrottleMs = 16L
     
     // Wait for valid duration
     LaunchedEffect(Unit) {
@@ -340,7 +340,7 @@ fun PlayerOverlay(
         showSeekbar = true
         showVideoInfo = true
         
-        // Set initial target time
+        // Set initial target time and NEVER update it during drag (prevents blinking)
         seekTargetTime = formatTimeSimple(seekStartPosition)
         seekDirection = ""
         
@@ -364,19 +364,15 @@ fun PlayerOverlay(
         
         val now = System.currentTimeMillis()
         
-        // Update UI every 16ms (60fps) - like old code
+        // Update UI smoothly (progress bar and current time display)
         if (now - lastHorizontalUpdateTime > uiUpdateThrottleMs) {
             currentTime = formatTimeSimple(clampedPosition)
             seekbarPosition = clampedPosition.toFloat()
-            
-            // Update feedback time on every UI update - exactly like old code
-            seekTargetTime = formatTimeSimple(clampedPosition)
-            seekDirection = if (deltaX > 0) "+" else "-"
-            
+            // DO NOT update seekTargetTime here - leave it static to prevent blinking
             lastHorizontalUpdateTime = now
         }
         
-        // Throttle MPV seeks separately
+        // Perform seek with throttling
         if (now - lastSeekTime > seekThrottleMs) {
             performSmoothSeek(clampedPosition)
             lastSeekTime = now
