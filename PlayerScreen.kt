@@ -357,10 +357,13 @@ fun PlayerOverlay(
         val duration = mpv.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
+        // Calculate current second for target time updates (rounded to nearest second)
+        val currentSecond = (clampedPosition + 0.5).toInt()
+        
         val now = System.currentTimeMillis()
         
-        // FIXED: Only update target time when it actually changes
-        val newTargetTime = formatTimeSimple(clampedPosition)
+        // FIXED: Only update target time when second changes (like seekbar seeking)
+        val newTargetTime = formatTimeSimple(currentSecond.toDouble())
         if (newTargetTime != seekTargetTime) {
             seekTargetTime = newTargetTime
             seekDirection = if (deltaX > 0) "+" else "-"
@@ -491,7 +494,7 @@ fun PlayerOverlay(
                     
                     lastSeekedSecond = clampedSecond
                     
-                    // FIXED: Only update target time when second changes
+                    // Only update target time when second changes
                     val newTargetTime = formatTimeSimple(clampedSecond.toDouble())
                     if (newTargetTime != dragTargetTime) {
                         dragTargetTime = newTargetTime
@@ -796,7 +799,7 @@ fun PlayerOverlay(
             )
         }
         
-        // Feedback displays - CENTER TIME ONLY UPDATES WHEN TARGET CHANGES
+        // Feedback displays - CENTER TIME ONLY UPDATES WHEN TARGET SECOND CHANGES
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 isSpeedingUp -> Text(
