@@ -214,7 +214,7 @@ fun PlayerOverlay(
     var seekTargetTime by remember { mutableStateOf("00:00") }
     var lastSeekTime by remember { mutableStateOf(0L) }
     var lastHorizontalUpdateTime by remember { mutableStateOf(0L) }
-    var lastFeedbackUpdateTime by remember { mutableStateOf(0L) } // Track feedback updates separately
+    var lastFeedbackUpdateTime by remember { mutableStateOf(0L) }
     
     // Touch tracking
     var touchStartX by remember { mutableStateOf(0f) }
@@ -242,7 +242,7 @@ fun PlayerOverlay(
     // Throttle
     val seekThrottleMs = 33L
     val uiUpdateThrottleMs = 16L
-    val feedbackThrottleMs = 100L // Update feedback at 10fps to reduce blinking
+    val feedbackThrottleMs = 100L // 10fps feedback updates
     
     // Wait for valid duration
     LaunchedEffect(Unit) {
@@ -338,7 +338,7 @@ fun PlayerOverlay(
         seekStartX = startX
         seekStartPosition = mpv.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeDrag = mpv.getPropertyBoolean("pause") == false
-        showSeekTime = true  // Keep true throughout the entire drag
+        showSeekTime = true
         showSeekbar = true
         showVideoInfo = true
         
@@ -380,7 +380,7 @@ fun PlayerOverlay(
             lastSeekTime = now
         }
         
-        // Update feedback text at a slower rate to reduce blinking
+        // Update feedback text at a slower rate (10fps)
         if (now - lastFeedbackUpdateTime > feedbackThrottleMs) {
             val newTimeString = formatTimeSimple(clampedPosition)
             if (newTimeString != seekTargetTime) {
@@ -405,7 +405,7 @@ fun PlayerOverlay(
             
             isHorizontalSwipe = false
             isHorizontalSeeking = false
-            showSeekTime = false  // Only turn off when seeking ends
+            showSeekTime = false
             seekStartX = 0f
             seekStartPosition = 0.0
             wasPlayingBeforeDrag = false
@@ -648,37 +648,74 @@ fun PlayerOverlay(
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val screenWidth = constraints.maxWidth.toFloat()
         
-        // Full screen gesture area
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInteropFilter { event ->
-                    when (event.action) {
-                        MotionEvent.ACTION_DOWN -> {
-                            touchStartX = event.x
-                            touchStartY = event.y
-                            startLongTapDetection()
-                            true
-                        }
-                        MotionEvent.ACTION_MOVE -> {
-                            if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap && !isDraggingSeekbar) {
-                                when (checkForSwipeDirection(event.x, event.y)) {
-                                    "horizontal" -> startHorizontalSeeking(event.x)
-                                    "vertical" -> startVerticalSwipe(event.y)
+        // ============= GESTURE AREA WITH IGNORE ZONES (RESTORED) =============
+        Box(modifier = Modifier.fillMaxSize()) {
+            // Top 5% ignore area (for status bar)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.05f)
+                    .align(Alignment.TopStart)
+            )
+            
+            // Bottom 95% area containing left/right ignore zones and center gesture area
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fillMaxHeight(0.95f)
+                    .align(Alignment.BottomStart)
+            ) {
+                // Left 5% ignore area
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.05f)
+                        .fillMaxHeight()
+                        .align(Alignment.CenterStart)
+                )
+                
+                // Center 90% gesture area
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .fillMaxHeight()
+                        .align(Alignment.Center)
+                        .pointerInteropFilter { event ->
+                            when (event.action) {
+                                MotionEvent.ACTION_DOWN -> {
+                                    touchStartX = event.x
+                                    touchStartY = event.y
+                                    startLongTapDetection()
+                                    true
                                 }
-                            } else if (isHorizontalSwipe) {
-                                handleHorizontalSeeking(event.x)
+                                MotionEvent.ACTION_MOVE -> {
+                                    if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap && !isDraggingSeekbar) {
+                                        when (checkForSwipeDirection(event.x, event.y)) {
+                                            "horizontal" -> startHorizontalSeeking(event.x)
+                                            "vertical" -> startVerticalSwipe(event.y)
+                                        }
+                                    } else if (isHorizontalSwipe) {
+                                        handleHorizontalSeeking(event.x)
+                                    }
+                                    true
+                                }
+                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                    endTouch()
+                                    true
+                                }
+                                else -> false
                             }
-                            true
                         }
-                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                            endTouch()
-                            true
-                        }
-                        else -> false
-                    }
-                }
-        )
+                )
+                
+                // Right 5% ignore area
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.05f)
+                        .fillMaxHeight()
+                        .align(Alignment.CenterEnd)
+                )
+            }
+        }
         
         // Seekbar Area
         if (showSeekbar) {
@@ -800,7 +837,7 @@ fun PlayerOverlay(
             )
         }
         
-        // Feedback displays - Show during entire horizontal swipe
+        // Feedback displays
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 isSpeedingUp -> Text(
