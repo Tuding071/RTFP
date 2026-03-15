@@ -204,7 +204,7 @@ fun PlayerOverlay(
     var lastSeekedSecond by remember { mutableStateOf(0) }
     var dragStartX by remember { mutableStateOf(0f) }
     
-    // Full screen gesture states - SEPARATE FLAGS
+    // Full screen gesture states
     var isHorizontalSwipe by remember { mutableStateOf(false) }
     var isHorizontalSeeking by remember { mutableStateOf(false) }
     var isVerticalSwipe by remember { mutableStateOf(false) }
@@ -240,6 +240,7 @@ fun PlayerOverlay(
     
     // Throttle
     val seekThrottleMs = 33L
+    val uiUpdateThrottleMs = 16L  // 60fps for UI updates (like old code)
     
     // Wait for valid duration
     LaunchedEffect(Unit) {
@@ -361,29 +362,23 @@ fun PlayerOverlay(
         val duration = mpv.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
-        // Calculate current second (rounded) for feedback updates
-        val currentSecond = (clampedPosition + 0.5).toInt()
-        
         val now = System.currentTimeMillis()
         
-        // Update UI smoothly (progress bar and current time display)
-        if (now - lastHorizontalUpdateTime > 16) {
+        // Update UI every 16ms (60fps) - like old code
+        if (now - lastHorizontalUpdateTime > uiUpdateThrottleMs) {
             currentTime = formatTimeSimple(clampedPosition)
             seekbarPosition = clampedPosition.toFloat()
+            
+            // Update feedback time on every UI update - exactly like old code
+            seekTargetTime = formatTimeSimple(clampedPosition)
+            seekDirection = if (deltaX > 0) "+" else "-"
+            
             lastHorizontalUpdateTime = now
         }
         
-        // Perform seek with throttling
+        // Throttle MPV seeks separately
         if (now - lastSeekTime > seekThrottleMs) {
             performSmoothSeek(clampedPosition)
-            
-            // ONLY update feedback time when second changes (like seekbar seeking)
-            val newTargetTime = formatTimeSimple(currentSecond.toDouble())
-            if (newTargetTime != seekTargetTime) {
-                seekTargetTime = newTargetTime
-                seekDirection = if (deltaX > 0) "+" else "-"
-            }
-            
             lastSeekTime = now
         }
     }
@@ -499,7 +494,7 @@ fun PlayerOverlay(
                     
                     lastSeekedSecond = clampedSecond
                     
-                    // Update target time when threshold crossed (seek happens)
+                    // Update target time when threshold crossed
                     dragTargetTime = formatTimeSimple(clampedSecond.toDouble())
                     
                     dragAccumulatedPixels -= (secondsToSeek * threshold)
@@ -635,14 +630,10 @@ fun PlayerOverlay(
     }
     
     // ============= ALPHA VALUES =============
-    // During any seeking/dragging, only show the seekbar and center feedback
     val isAnySeeking = isHorizontalSeeking || isDraggingSeekbar || isHorizontalSwipe
     
-    // Title - completely transparent during seeking
     val videoInfoTextAlpha = if (isAnySeeking) 0.0f else 1.0f
     val videoInfoBackgroundAlpha = if (isAnySeeking) 0.0f else 0.8f
-    
-    // Bottom time display - completely transparent during seeking
     val timeDisplayTextAlpha = if (isAnySeeking) 0.0f else 1.0f
     val timeDisplayBackgroundAlpha = if (isAnySeeking) 0.0f else 0.8f
     
@@ -681,7 +672,7 @@ fun PlayerOverlay(
                 }
         )
         
-        // Seekbar Area - ALWAYS VISIBLE when showSeekbar is true
+        // Seekbar Area
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -695,7 +686,7 @@ fun PlayerOverlay(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Time display (fades out during seeking)
+                    // Time display
                     Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
                         Row(
                             modifier = Modifier.align(Alignment.CenterStart),
@@ -715,7 +706,7 @@ fun PlayerOverlay(
                         }
                     }
                     
-                    // Progress Bar - ALWAYS VISIBLE
+                    // Progress Bar with drag handling
                     Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
                         if (videoDuration > 1.0) {
                             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -784,7 +775,7 @@ fun PlayerOverlay(
             }
         }
         
-        // Video title (fades out during seeking)
+        // Video title
         if (showVideoInfo) {
             Text(
                 text = fileName,
@@ -801,7 +792,7 @@ fun PlayerOverlay(
             )
         }
         
-        // Feedback displays - CENTER TIME ONLY UPDATES WHEN SECOND CHANGES (like seekbar seeking)
+        // Feedback displays
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 isSpeedingUp -> Text(
