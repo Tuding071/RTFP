@@ -231,7 +231,7 @@ fun PlayerOverlay(
     var quickSeekFeedbackText by remember { mutableStateOf("") }
     
     // Thresholds
-    val deadzoneThresholdPx = with(density) { 25.dp.toPx() }
+    val deadzoneThresholdPx = with(density) { 50.dp.toPx() }
     val longTapThreshold = 300L
     val horizontalSwipeThreshold = 30f
     val verticalSwipeThreshold = 40f
