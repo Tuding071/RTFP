@@ -206,7 +206,7 @@ fun PlayerOverlay(
     
     // Full screen gesture states - SEPARATE FLAGS
     var isHorizontalSwipe by remember { mutableStateOf(false) }
-    var isHorizontalSeeking by remember { mutableStateOf(false) }  // Separate flag for horizontal seeking
+    var isHorizontalSeeking by remember { mutableStateOf(false) }
     var isVerticalSwipe by remember { mutableStateOf(false) }
     var seekStartX by remember { mutableStateOf(0f) }
     var seekStartPosition by remember { mutableStateOf(0.0) }
@@ -357,12 +357,16 @@ fun PlayerOverlay(
         val duration = mpv.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
-        seekDirection = if (deltaX > 0) "+" else "-"
-        seekTargetTime = formatTimeSimple(clampedPosition)
-        
         val now = System.currentTimeMillis()
         
-        // Update UI smoothly
+        // FIXED: Only update target time when it actually changes
+        val newTargetTime = formatTimeSimple(clampedPosition)
+        if (newTargetTime != seekTargetTime) {
+            seekTargetTime = newTargetTime
+            seekDirection = if (deltaX > 0) "+" else "-"
+        }
+        
+        // Update UI smoothly (progress bar and current time display)
         if (now - lastHorizontalUpdateTime > 16) {
             currentTime = formatTimeSimple(clampedPosition)
             seekbarPosition = clampedPosition.toFloat()
@@ -486,13 +490,19 @@ fun PlayerOverlay(
                     lastSeekTime = now
                     
                     lastSeekedSecond = clampedSecond
-                    dragTargetTime = formatTimeSimple(clampedSecond.toDouble())
+                    
+                    // FIXED: Only update target time when second changes
+                    val newTargetTime = formatTimeSimple(clampedSecond.toDouble())
+                    if (newTargetTime != dragTargetTime) {
+                        dragTargetTime = newTargetTime
+                    }
                     
                     dragAccumulatedPixels -= (secondsToSeek * threshold)
                 }
             }
         }
         
+        // Update progress bar position smoothly for visual feedback
         val newPosition = (lastSeekedSecond + (dragAccumulatedPixels / threshold)).toDouble()
             .coerceIn(0.0, videoDuration)
         seekbarPosition = newPosition.toFloat()
@@ -619,7 +629,7 @@ fun PlayerOverlay(
         isLongTap = false
     }
     
-    // ============= ALPHA VALUES - FIXED =============
+    // ============= ALPHA VALUES =============
     // During any seeking/dragging, only show the seekbar and center feedback
     val isAnySeeking = isHorizontalSeeking || isDraggingSeekbar || isHorizontalSwipe
     
@@ -786,7 +796,7 @@ fun PlayerOverlay(
             )
         }
         
-        // Feedback displays - CENTER TIME ALWAYS VISIBLE DURING SEEKING
+        // Feedback displays - CENTER TIME ONLY UPDATES WHEN TARGET CHANGES
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 isSpeedingUp -> Text(
