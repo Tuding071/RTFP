@@ -357,17 +357,11 @@ fun PlayerOverlay(
         val duration = mpv.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
-        // Calculate current second for target time updates (rounded to nearest second)
-        val currentSecond = (clampedPosition + 0.5).toInt()
-        
         val now = System.currentTimeMillis()
         
-        // FIXED: Only update target time when second changes (like seekbar seeking)
-        val newTargetTime = formatTimeSimple(currentSecond.toDouble())
-        if (newTargetTime != seekTargetTime) {
-            seekTargetTime = newTargetTime
-            seekDirection = if (deltaX > 0) "+" else "-"
-        }
+        // ORIGINAL BEHAVIOR: Just update target time directly (continuous updating)
+        seekTargetTime = formatTimeSimple(clampedPosition)
+        seekDirection = if (deltaX > 0) "+" else "-"
         
         // Update UI smoothly (progress bar and current time display)
         if (now - lastHorizontalUpdateTime > 16) {
@@ -494,11 +488,8 @@ fun PlayerOverlay(
                     
                     lastSeekedSecond = clampedSecond
                     
-                    // Only update target time when second changes
-                    val newTargetTime = formatTimeSimple(clampedSecond.toDouble())
-                    if (newTargetTime != dragTargetTime) {
-                        dragTargetTime = newTargetTime
-                    }
+                    // Update target time when second changes
+                    dragTargetTime = formatTimeSimple(clampedSecond.toDouble())
                     
                     dragAccumulatedPixels -= (secondsToSeek * threshold)
                 }
@@ -799,7 +790,7 @@ fun PlayerOverlay(
             )
         }
         
-        // Feedback displays - CENTER TIME ONLY UPDATES WHEN TARGET SECOND CHANGES
+        // Feedback displays - CENTER TIME SHOWS TARGET TIME (original behavior)
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 isSpeedingUp -> Text(
