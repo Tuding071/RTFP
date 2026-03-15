@@ -619,10 +619,15 @@ fun PlayerOverlay(
         isLongTap = false
     }
     
-    // Alpha values - use both flags
-    val isAnySeeking = isHorizontalSeeking || isDraggingSeekbar
+    // ============= ALPHA VALUES - FIXED =============
+    // During any seeking/dragging, only show the seekbar and center feedback
+    val isAnySeeking = isHorizontalSeeking || isDraggingSeekbar || isHorizontalSwipe
+    
+    // Title - completely transparent during seeking
     val videoInfoTextAlpha = if (isAnySeeking) 0.0f else 1.0f
     val videoInfoBackgroundAlpha = if (isAnySeeking) 0.0f else 0.8f
+    
+    // Bottom time display - completely transparent during seeking
     val timeDisplayTextAlpha = if (isAnySeeking) 0.0f else 1.0f
     val timeDisplayBackgroundAlpha = if (isAnySeeking) 0.0f else 0.8f
     
@@ -661,7 +666,7 @@ fun PlayerOverlay(
                 }
         )
         
-        // Seekbar Area
+        // Seekbar Area - ALWAYS VISIBLE when showSeekbar is true
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -675,7 +680,7 @@ fun PlayerOverlay(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Time display
+                    // Time display (fades out during seeking)
                     Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
                         Row(
                             modifier = Modifier.align(Alignment.CenterStart),
@@ -695,7 +700,7 @@ fun PlayerOverlay(
                         }
                     }
                     
-                    // Progress Bar with drag handling
+                    // Progress Bar - ALWAYS VISIBLE
                     Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
                         if (videoDuration > 1.0) {
                             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -764,7 +769,7 @@ fun PlayerOverlay(
             }
         }
         
-        // Video title
+        // Video title (fades out during seeking)
         if (showVideoInfo) {
             Text(
                 text = fileName,
@@ -781,7 +786,7 @@ fun PlayerOverlay(
             )
         }
         
-        // Feedback displays
+        // Feedback displays - CENTER TIME ALWAYS VISIBLE DURING SEEKING
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 isSpeedingUp -> Text(
