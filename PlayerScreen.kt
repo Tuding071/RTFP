@@ -196,7 +196,7 @@ fun PlayerOverlay(
     
     // Drag state - SEEK BAR AREA
     var isDraggingSeekbar by remember { mutableStateOf(false) }
-    var hasCrossedDeadzone by remember { mutableStateOf(false) }
+    var hasCrossedSeekbarDeadzone by remember { mutableStateOf(false) }
     var dragAccumulatedPixels by remember { mutableStateOf(0f) }
     var dragStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeDrag by remember { mutableStateOf(false) }
@@ -230,19 +230,20 @@ fun PlayerOverlay(
     var showQuickSeekFeedback by remember { mutableStateOf(false) }
     var quickSeekFeedbackText by remember { mutableStateOf("") }
     
-    // Thresholds
-    val deadzoneThresholdPx = with(density) { 300.dp.toPx() }
+    // Thresholds - ALL NOW IN PIXELS WITH DP CONVERSION
+    val seekbarDeadzonePx = with(density) { 25.dp.toPx() }      // 25dp for seekbar
+    val horizontalDeadzonePx = with(density) { 50.dp.toPx() }   // 50dp for horizontal swipe
+    val verticalDeadzonePx = with(density) { 40.dp.toPx() }     // 40dp for vertical swipe
+    
     val longTapThreshold = 300L
-    val horizontalSwipeThreshold = 30f
-    val verticalSwipeThreshold = 40f
-    val maxVerticalMovement = 50f
-    val maxHorizontalMovement = 50f
+    val maxVerticalMovement = with(density) { 50.dp.toPx() }    // Max vertical movement during horizontal swipe
+    val maxHorizontalMovement = with(density) { 50.dp.toPx() }  // Max horizontal movement during vertical swipe
     val quickSeekAmount = 5
     
     // Throttle
     val seekThrottleMs = 33L
     val uiUpdateThrottleMs = 16L
-    val feedbackThrottleMs = 100L // 10fps feedback updates
+    val feedbackThrottleMs = 100L
     
     // Wait for valid duration
     LaunchedEffect(Unit) {
@@ -380,7 +381,7 @@ fun PlayerOverlay(
             lastSeekTime = now
         }
         
-        // Update feedback text at a slower rate (10fps)
+        // Update feedback text at a slower rate
         if (now - lastFeedbackUpdateTime > feedbackThrottleMs) {
             val newTimeString = formatTimeSimple(clampedPosition)
             if (newTimeString != seekTargetTime) {
@@ -429,7 +430,7 @@ fun PlayerOverlay(
         isVerticalSwipe = false
     }
     
-    // ============= NEW SEEKBAR DRAG LOGIC =============
+    // ============= FIXED SEEKBAR DRAG LOGIC =============
     fun calculatePixelThreshold(touchAreaWidth: Float): Float {
         return if (videoDuration > 0) {
             touchAreaWidth / videoDuration.toFloat()
@@ -440,7 +441,7 @@ fun PlayerOverlay(
     
     fun startSeekbarDrag(startX: Float, seekbarWidth: Float) {
         isDraggingSeekbar = true
-        hasCrossedDeadzone = false
+        hasCrossedSeekbarDeadzone = false
         dragAccumulatedPixels = 0f
         dragStartPosition = mpv.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeDrag = mpv.getPropertyBoolean("pause") == false
@@ -466,20 +467,25 @@ fun PlayerOverlay(
         val deltaX = currentX - dragStartX
         val totalDragDistance = abs(deltaX)
         
-        if (!hasCrossedDeadzone) {
-            if (totalDragDistance > deadzoneThresholdPx) {
-                hasCrossedDeadzone = true
+        // FIXED: Proper deadzone handling
+        if (!hasCrossedSeekbarDeadzone) {
+            if (totalDragDistance > seekbarDeadzonePx) {
+                hasCrossedSeekbarDeadzone = true
+                // When crossing deadzone, set new start position to current position
+                dragStartX = currentX
                 dragAccumulatedPixels = 0f
-                dragStartX = currentX - (deadzoneThresholdPx * sign(deltaX))
             } else {
-                val threshold = calculatePixelThreshold(seekbarWidth)
-                val previewPosition = dragStartPosition + (deltaX / threshold)
-                seekbarPosition = previewPosition.toFloat().coerceIn(0f, videoDuration.toFloat())
-                currentTime = formatTimeSimple(seekbarPosition.toDouble())
+                // Still in deadzone - show preview only, no seeking
+                val pixelsPerSecond = seekbarWidth / videoDuration.toFloat()
+                val previewDelta = deltaX / pixelsPerSecond
+                val previewPosition = (dragStartPosition + previewDelta).coerceIn(0.0, videoDuration)
+                seekbarPosition = previewPosition.toFloat()
+                currentTime = formatTimeSimple(previewPosition)
                 return
             }
         }
         
+        // After deadzone, handle seeking with dynamic threshold
         val threshold = calculatePixelThreshold(seekbarWidth)
         val movementDelta = currentX - dragStartX
         dragAccumulatedPixels += movementDelta
@@ -501,16 +507,13 @@ fun PlayerOverlay(
                     lastSeekTime = now
                     
                     lastSeekedSecond = clampedSecond
-                    
-                    // Update target time when threshold crossed
                     dragTargetTime = formatTimeSimple(clampedSecond.toDouble())
-                    
                     dragAccumulatedPixels -= (secondsToSeek * threshold)
                 }
             }
         }
         
-        // Update progress bar position smoothly for visual feedback
+        // Update progress bar position smoothly
         val newPosition = (lastSeekedSecond + (dragAccumulatedPixels / threshold)).toDouble()
             .coerceIn(0.0, videoDuration)
         seekbarPosition = newPosition.toFloat()
@@ -530,7 +533,7 @@ fun PlayerOverlay(
             }
             
             isDraggingSeekbar = false
-            hasCrossedDeadzone = false
+            hasCrossedSeekbarDeadzone = false
             dragAccumulatedPixels = 0f
             wasPlayingBeforeDrag = false
             showSeekTime = false
@@ -551,25 +554,27 @@ fun PlayerOverlay(
             }
             
             isDraggingSeekbar = false
-            hasCrossedDeadzone = false
+            hasCrossedSeekbarDeadzone = false
             dragAccumulatedPixels = 0f
             wasPlayingBeforeDrag = false
             showSeekTime = false
         }
     }
     
-    // ============= TOUCH HANDLING =============
+    // ============= TOUCH HANDLING WITH FIXED THRESHOLDS =============
     fun checkForSwipeDirection(currentX: Float, currentY: Float): String {
         if (isHorizontalSwipe || isVerticalSwipe || isLongTap || isDraggingSeekbar) return ""
         
         val deltaX = abs(currentX - touchStartX)
         val deltaY = abs(currentY - touchStartY)
         
-        if (deltaX > horizontalSwipeThreshold && deltaX > deltaY && deltaY < maxVerticalMovement) {
+        // Check for horizontal swipe
+        if (deltaX > horizontalDeadzonePx && deltaX > deltaY && deltaY < maxVerticalMovement) {
             return "horizontal"
         }
         
-        if (deltaY > verticalSwipeThreshold && deltaY > deltaX && deltaX < maxHorizontalMovement) {
+        // Check for vertical swipe
+        if (deltaY > verticalDeadzonePx && deltaY > deltaX && deltaX < maxHorizontalMovement) {
             return "vertical"
         }
         
@@ -648,9 +653,9 @@ fun PlayerOverlay(
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val screenWidth = constraints.maxWidth.toFloat()
         
-        // ============= GESTURE AREA WITH IGNORE ZONES (RESTORED) =============
+        // Gesture area with ignore zones
         Box(modifier = Modifier.fillMaxSize()) {
-            // Top 5% ignore area (for status bar)
+            // Top 5% ignore area
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -658,7 +663,7 @@ fun PlayerOverlay(
                     .align(Alignment.TopStart)
             )
             
-            // Bottom 95% area containing left/right ignore zones and center gesture area
+            // Bottom 95% area
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -850,7 +855,6 @@ fun PlayerOverlay(
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
-                // Show during horizontal swipe OR when showSeekTime is true
                 (isHorizontalSwipe || showSeekTime || isDraggingSeekbar) -> Text(
                     text = if (isHorizontalSwipe) "$seekTargetTime $seekDirection" else dragTargetTime,
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
