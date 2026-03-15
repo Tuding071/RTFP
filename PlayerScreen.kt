@@ -214,6 +214,7 @@ fun PlayerOverlay(
     var seekTargetTime by remember { mutableStateOf("00:00") }
     var lastSeekTime by remember { mutableStateOf(0L) }
     var lastHorizontalUpdateTime by remember { mutableStateOf(0L) }
+    var lastFeedbackUpdateTime by remember { mutableStateOf(0L) } // Track feedback updates separately
     
     // Touch tracking
     var touchStartX by remember { mutableStateOf(0f) }
@@ -241,6 +242,7 @@ fun PlayerOverlay(
     // Throttle
     val seekThrottleMs = 33L
     val uiUpdateThrottleMs = 16L
+    val feedbackThrottleMs = 100L // Update feedback at 10fps to reduce blinking
     
     // Wait for valid duration
     LaunchedEffect(Unit) {
@@ -336,7 +338,7 @@ fun PlayerOverlay(
         seekStartX = startX
         seekStartPosition = mpv.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeDrag = mpv.getPropertyBoolean("pause") == false
-        showSeekTime = true
+        showSeekTime = true  // Keep true throughout the entire drag
         showSeekbar = true
         showVideoInfo = true
         
@@ -350,6 +352,7 @@ fun PlayerOverlay(
         
         lastSeekTime = 0L
         lastHorizontalUpdateTime = 0L
+        lastFeedbackUpdateTime = 0L
     }
     
     fun handleHorizontalSeeking(currentX: Float) {
@@ -371,16 +374,20 @@ fun PlayerOverlay(
             lastHorizontalUpdateTime = now
         }
         
-        // Perform seek with throttling - ONLY update feedback when seek happens
+        // Perform seek with throttling
         if (now - lastSeekTime > seekThrottleMs) {
             performSmoothSeek(clampedPosition)
-            
-            // Calculate new target second based on the seek we just performed
-            val newSecond = (clampedPosition + 0.5).toInt()
-            seekTargetTime = formatTimeSimple(newSecond.toDouble())
-            seekDirection = if (deltaX > 0) "+" else "-"
-            
             lastSeekTime = now
+        }
+        
+        // Update feedback text at a slower rate to reduce blinking
+        if (now - lastFeedbackUpdateTime > feedbackThrottleMs) {
+            val newTimeString = formatTimeSimple(clampedPosition)
+            if (newTimeString != seekTargetTime) {
+                seekTargetTime = newTimeString
+                seekDirection = if (deltaX > 0) "+" else "-"
+            }
+            lastFeedbackUpdateTime = now
         }
     }
     
@@ -398,7 +405,7 @@ fun PlayerOverlay(
             
             isHorizontalSwipe = false
             isHorizontalSeeking = false
-            showSeekTime = false
+            showSeekTime = false  // Only turn off when seeking ends
             seekStartX = 0f
             seekStartPosition = 0.0
             wasPlayingBeforeDrag = false
@@ -793,7 +800,7 @@ fun PlayerOverlay(
             )
         }
         
-        // Feedback displays
+        // Feedback displays - Show during entire horizontal swipe
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 isSpeedingUp -> Text(
@@ -806,8 +813,9 @@ fun PlayerOverlay(
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
-                (isHorizontalSeeking || isDraggingSeekbar) -> Text(
-                    text = if (isHorizontalSeeking) "$seekTargetTime $seekDirection" else dragTargetTime,
+                // Show during horizontal swipe OR when showSeekTime is true
+                (isHorizontalSwipe || showSeekTime || isDraggingSeekbar) -> Text(
+                    text = if (isHorizontalSwipe) "$seekTargetTime $seekDirection" else dragTargetTime,
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
