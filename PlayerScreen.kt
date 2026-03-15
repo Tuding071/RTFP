@@ -339,7 +339,7 @@ fun PlayerOverlay(
         showSeekbar = true
         showVideoInfo = true
         
-        // Set initial target time (like seekbar seeking)
+        // Set initial target time
         seekTargetTime = formatTimeSimple(seekStartPosition)
         seekDirection = ""
         
@@ -361,6 +361,9 @@ fun PlayerOverlay(
         val duration = mpv.getPropertyDouble("duration") ?: 0.0
         val clampedPosition = newPositionSeconds.coerceIn(0.0, duration)
         
+        // Calculate current second (rounded) for feedback updates
+        val currentSecond = (clampedPosition + 0.5).toInt()
+        
         val now = System.currentTimeMillis()
         
         // Update UI smoothly (progress bar and current time display)
@@ -370,11 +373,17 @@ fun PlayerOverlay(
             lastHorizontalUpdateTime = now
         }
         
-        // Perform seek with throttling - ONLY update feedback time when seek happens (like seekbar seeking)
+        // Perform seek with throttling
         if (now - lastSeekTime > seekThrottleMs) {
             performSmoothSeek(clampedPosition)
-            seekTargetTime = formatTimeSimple(clampedPosition)
-            seekDirection = if (deltaX > 0) "+" else "-"
+            
+            // ONLY update feedback time when second changes (like seekbar seeking)
+            val newTargetTime = formatTimeSimple(currentSecond.toDouble())
+            if (newTargetTime != seekTargetTime) {
+                seekTargetTime = newTargetTime
+                seekDirection = if (deltaX > 0) "+" else "-"
+            }
+            
             lastSeekTime = now
         }
     }
@@ -792,7 +801,7 @@ fun PlayerOverlay(
             )
         }
         
-        // Feedback displays - CENTER TIME ONLY UPDATES WHEN SEEK HAPPENS (like seekbar seeking)
+        // Feedback displays - CENTER TIME ONLY UPDATES WHEN SECOND CHANGES (like seekbar seeking)
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 isSpeedingUp -> Text(
