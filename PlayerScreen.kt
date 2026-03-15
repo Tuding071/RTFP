@@ -340,7 +340,7 @@ fun PlayerOverlay(
         showSeekbar = true
         showVideoInfo = true
         
-        // Set initial target time and NEVER update it during drag (prevents blinking)
+        // Set initial target time
         seekTargetTime = formatTimeSimple(seekStartPosition)
         seekDirection = ""
         
@@ -364,17 +364,22 @@ fun PlayerOverlay(
         
         val now = System.currentTimeMillis()
         
-        // Update UI smoothly (progress bar and current time display)
+        // Update UI smoothly (progress bar only)
         if (now - lastHorizontalUpdateTime > uiUpdateThrottleMs) {
             currentTime = formatTimeSimple(clampedPosition)
             seekbarPosition = clampedPosition.toFloat()
-            // DO NOT update seekTargetTime here - leave it static to prevent blinking
             lastHorizontalUpdateTime = now
         }
         
-        // Perform seek with throttling
+        // Perform seek with throttling - ONLY update feedback when seek happens
         if (now - lastSeekTime > seekThrottleMs) {
             performSmoothSeek(clampedPosition)
+            
+            // Calculate new target second based on the seek we just performed
+            val newSecond = (clampedPosition + 0.5).toInt()
+            seekTargetTime = formatTimeSimple(newSecond.toDouble())
+            seekDirection = if (deltaX > 0) "+" else "-"
+            
             lastSeekTime = now
         }
     }
