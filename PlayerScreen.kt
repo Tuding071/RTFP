@@ -194,7 +194,7 @@ fun PlayerOverlay(
     var fileName by remember { mutableStateOf("RTFP") }
     var showSeekTime by remember { mutableStateOf(false) }
     
-    // Drag state - ONLY FOR SEEKBAR AREA
+    // Drag state - SEEK BAR AREA
     var isDraggingSeekbar by remember { mutableStateOf(false) }
     var hasCrossedDeadzone by remember { mutableStateOf(false) }
     var dragAccumulatedPixels by remember { mutableStateOf(0f) }
@@ -204,10 +204,10 @@ fun PlayerOverlay(
     var lastSeekedSecond by remember { mutableStateOf(0) }
     var dragStartX by remember { mutableStateOf(0f) }
     
-    // Full screen gesture states
+    // Full screen gesture states - SEPARATE FLAGS
     var isHorizontalSwipe by remember { mutableStateOf(false) }
+    var isHorizontalSeeking by remember { mutableStateOf(false) }  // Separate flag for horizontal seeking
     var isVerticalSwipe by remember { mutableStateOf(false) }
-    var isSeeking by remember { mutableStateOf(false) }
     var seekStartX by remember { mutableStateOf(0f) }
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var seekDirection by remember { mutableStateOf("") }
@@ -266,7 +266,7 @@ fun PlayerOverlay(
     // Update time when not seeking/dragging
     LaunchedEffect(Unit) {
         while (isActive) {
-            if (!isSeeking && !isDraggingSeekbar) {
+            if (!isHorizontalSeeking && !isDraggingSeekbar) {
                 val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
                 currentTime = formatTimeSimple(currentPos)
                 seekbarPosition = currentPos.toFloat()
@@ -321,12 +321,12 @@ fun PlayerOverlay(
     
     // ============= HORIZONTAL SWIPE FUNCTIONS =============
     fun performSmoothSeek(targetPosition: Double) {
-        if (isSeeking) return
-        isSeeking = true
+        if (isHorizontalSeeking) return
+        isHorizontalSeeking = true
         mpv.command("seek", targetPosition.toString(), "absolute", "exact")
         coroutineScope.launch {
             delay(seekThrottleMs)
-            isSeeking = false
+            isHorizontalSeeking = false
         }
     }
     
@@ -335,7 +335,6 @@ fun PlayerOverlay(
         seekStartX = startX
         seekStartPosition = mpv.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeDrag = mpv.getPropertyBoolean("pause") == false
-        isSeeking = true
         showSeekTime = true
         showSeekbar = true
         showVideoInfo = true
@@ -370,7 +369,7 @@ fun PlayerOverlay(
             lastHorizontalUpdateTime = now
         }
         
-        // FIXED: Actually perform the seek with throttling
+        // Perform seek with throttling
         if (now - lastSeekTime > seekThrottleMs) {
             performSmoothSeek(clampedPosition)
             lastSeekTime = now
@@ -390,7 +389,7 @@ fun PlayerOverlay(
             }
             
             isHorizontalSwipe = false
-            isSeeking = false
+            isHorizontalSeeking = false
             showSeekTime = false
             seekStartX = 0f
             seekStartPosition = 0.0
@@ -620,11 +619,12 @@ fun PlayerOverlay(
         isLongTap = false
     }
     
-    // Alpha values
-    val videoInfoTextAlpha = if (isSeeking || isDraggingSeekbar) 0.0f else 1.0f
-    val videoInfoBackgroundAlpha = if (isSeeking || isDraggingSeekbar) 0.0f else 0.8f
-    val timeDisplayTextAlpha = if (isSeeking || isDraggingSeekbar) 0.0f else 1.0f
-    val timeDisplayBackgroundAlpha = if (isSeeking || isDraggingSeekbar) 0.0f else 0.8f
+    // Alpha values - use both flags
+    val isAnySeeking = isHorizontalSeeking || isDraggingSeekbar
+    val videoInfoTextAlpha = if (isAnySeeking) 0.0f else 1.0f
+    val videoInfoBackgroundAlpha = if (isAnySeeking) 0.0f else 0.8f
+    val timeDisplayTextAlpha = if (isAnySeeking) 0.0f else 1.0f
+    val timeDisplayBackgroundAlpha = if (isAnySeeking) 0.0f else 0.8f
     
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val screenWidth = constraints.maxWidth.toFloat()
@@ -794,8 +794,8 @@ fun PlayerOverlay(
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
-                (isSeeking || isDraggingSeekbar) -> Text(
-                    text = if (isSeeking) "$seekTargetTime $seekDirection" else dragTargetTime,
+                (isHorizontalSeeking || isDraggingSeekbar) -> Text(
+                    text = if (isHorizontalSeeking) "$seekTargetTime $seekDirection" else dragTargetTime,
                     style = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium),
                     modifier = Modifier.background(Color.DarkGray.copy(alpha = 0.8f)).padding(horizontal = 12.dp, vertical = 4.dp)
                 )
