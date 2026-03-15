@@ -299,7 +299,7 @@ fun PlayerOverlay(
         mpv.setPropertyDouble("speed", if (isSpeedingUp) 2.0 else 1.0)
     }
     
-    // ============= HELPER FUNCTIONS (Defined first) =============
+    // ============= HELPER FUNCTIONS =============
     fun showPlaybackFeedback(text: String) {
         showPlaybackFeedback = true
         playbackFeedbackText = text
@@ -363,12 +363,14 @@ fun PlayerOverlay(
         
         val now = System.currentTimeMillis()
         
+        // Update UI smoothly
         if (now - lastHorizontalUpdateTime > 16) {
             currentTime = formatTimeSimple(clampedPosition)
             seekbarPosition = clampedPosition.toFloat()
             lastHorizontalUpdateTime = now
         }
         
+        // FIXED: Actually perform the seek with throttling
         if (now - lastSeekTime > seekThrottleMs) {
             performSmoothSeek(clampedPosition)
             lastSeekTime = now
