@@ -180,6 +180,7 @@ fun PlayerOverlay(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     
+    // Separate state for different UI elements to prevent blinking
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
     var seekTargetTime by remember { mutableStateOf("00:00") }
@@ -199,7 +200,10 @@ fun PlayerOverlay(
     var isSeekInProgress by remember { mutableStateOf(false) }
     val seekThrottleMs = 16L
     
-    // NEW: Throttling for horizontal swipe
+    // Track pause state separately
+    var isPaused by remember { mutableStateOf(false) }
+    
+    // Throttling for horizontal swipe
     var lastSeekTime by remember { mutableStateOf(0L) }
     var lastHorizontalUpdateTime by remember { mutableStateOf(0L) }
     
@@ -340,10 +344,12 @@ fun PlayerOverlay(
                 mpv.command("seek", currentPos.toString(), "absolute", "exact")
                 delay(100)
                 mpv.setPropertyBoolean("pause", false)
+                isPaused = false
             }
             showPlaybackFeedback("Resume")
         } else {
             mpv.setPropertyBoolean("pause", true)
+            isPaused = true
             showPlaybackFeedback("Pause")
         }
         if (showSeekbar) {
@@ -397,6 +403,7 @@ fun PlayerOverlay(
         
         if (wasPlayingBeforeSeek) {
             mpv.setPropertyBoolean("pause", true)
+            isPaused = true
         }
         
         // Reset throttling timers
@@ -457,6 +464,7 @@ fun PlayerOverlay(
                 coroutineScope.launch {
                     delay(100)
                     mpv.setPropertyBoolean("pause", false)
+                    isPaused = false
                 }
             }
             
@@ -523,7 +531,7 @@ fun PlayerOverlay(
         }
     }
     
-    // Update time - but don't fight with dragging
+    // Update time - separate coroutine for just the time display (runs less frequently)
     LaunchedEffect(Unit) {
         // Wait for duration to be valid
         var duration = mpv.getPropertyDouble("duration") ?: 0.0
@@ -532,45 +540,76 @@ fun PlayerOverlay(
             duration = mpv.getPropertyDouble("duration") ?: 0.0
         }
         
-        // Now start updating
+        // Update time display (slower refresh rate to prevent blinking)
         while (isActive) {
             val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
             val currentDuration = mpv.getPropertyDouble("duration") ?: duration
             
+            // Only update time display from video when NOT dragging
             if (!isSeeking && !isDragging) {
-                // Only update from video when NOT dragging
-                // This prevents the video from fighting with finger movement
                 currentTime = formatTimeSimple(currentPos)
-                seekbarPosition = currentPos.toFloat()
             }
             
+            // Update total time occasionally
             totalTime = formatTimeSimple(currentDuration)
-            seekbarDuration = currentDuration.toFloat()
             
-            delay(100) // Update less frequently when not dragging
+            delay(500) // Update time display every 500ms to prevent blinking
         }
     }
     
-    // Progress bar handlers - UPDATED for smooth independent movement
+    // Update seekbar position - separate coroutine for smooth seekbar movement
+    LaunchedEffect(Unit) {
+        // Wait for duration to be valid
+        var duration = mpv.getPropertyDouble("duration") ?: 0.0
+        while (duration <= 1.0) {
+            delay(100)
+            duration = mpv.getPropertyDouble("duration") ?: 0.0
+        }
+        
+        // Update seekbar position (faster refresh rate for smooth animation)
+        while (isActive) {
+            val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
+            val currentDuration = mpv.getPropertyDouble("duration") ?: duration
+            
+            // Update seekbar position from video when NOT dragging
+            if (!isSeeking && !isDragging) {
+                seekbarPosition = currentPos.toFloat()
+            }
+            
+            seekbarDuration = currentDuration.toFloat()
+            
+            delay(50) // Update seekbar every 50ms for smooth movement
+        }
+    }
+    
+    // Update pause state
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            isPaused = mpv.getPropertyBoolean("pause") == true
+            delay(200)
+        }
+    }
+    
+    // Progress bar handlers
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         
         // UI state management (showing/hiding elements)
         if (!isSeeking) {
             isSeeking = true
-            wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
+            wasPlayingBeforeSeek = !isPaused
             showSeekTime = true
             showSeekbar = true
             showVideoInfo = true
             
             if (wasPlayingBeforeSeek) {
                 mpv.setPropertyBoolean("pause", true)
+                isPaused = true
             }
         }
         isDragging = true
         
-        // Update UI positions IMMEDIATELY - no waiting for anything
-        // This is pure UI, doesn't depend on video processing
+        // Update UI positions IMMEDIATELY
         val oldPosition = seekbarPosition
         seekbarPosition = newPosition
         seekDirection = if (newPosition > oldPosition) "+" else "-"
@@ -580,10 +619,9 @@ fun PlayerOverlay(
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
         
-        // Throttle actual MPV seeks separately
+        // Throttle actual MPV seeks
         val now = System.currentTimeMillis()
         if (now - lastSeekTriggerTime >= progressBarSeekThrottleMs) {
-            // Round to nearest second for actual seek
             val roundedPosition = (targetPosition + 0.5).toInt().toDouble()
             performStepSeek(roundedPosition)
             lastSeekTriggerTime = now
@@ -591,7 +629,7 @@ fun PlayerOverlay(
     }
     
     fun handleDragFinished() {
-        // Get the final position from UI (not from MPV)
+        // Get the final position from UI
         val finalPosition = seekbarPosition.toDouble()
         
         // Round to nearest second for actual seek
@@ -606,13 +644,14 @@ fun PlayerOverlay(
             coroutineScope.launch {
                 delay(100)
                 mpv.setPropertyBoolean("pause", false)
+                isPaused = false
             }
         }
         isSeeking = false
         showSeekTime = false
         wasPlayingBeforeSeek = false
         seekDirection = ""
-        lastSeekTriggerTime = 0L // Reset throttle
+        lastSeekTriggerTime = 0L
     }
     
     val videoInfoTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
@@ -826,7 +865,7 @@ fun SimpleDraggableProgressBar(
                 .background(Color.Gray.copy(alpha = 0.6f))
         )
         
-        // Progress bar - moves instantly with finger, no waiting for video
+        // Progress bar - moves instantly with finger
         Box(
             modifier = Modifier
                 .fillMaxWidth(fraction = progressFraction)
@@ -847,7 +886,7 @@ fun SimpleDraggableProgressBar(
                             dragStartX = offset.x
                             positionAtDragStart = getFreshPosition().coerceIn(0f, safeDuration)
                             isDragging = true
-                            lastSeekTime = 0L // Reset throttle on new drag
+                            lastSeekTime = 0L
                             
                             // Immediately send the starting position
                             onValueChange(positionAtDragStart)
@@ -862,22 +901,18 @@ fun SimpleDraggableProgressBar(
                             val newPosition = (positionAtDragStart + deltaPosition)
                                 .coerceIn(0f, safeDuration)
                             
-                            // ALWAYS update UI position immediately - no waiting
-                            // This makes the bar follow your finger perfectly
+                            // ALWAYS update UI position immediately
                             onValueChange(newPosition)
                             
                             // Throttle actual MPV seeks separately
                             val now = System.currentTimeMillis()
                             if (now - lastSeekTime >= seekThrottleMs) {
-                                // This will trigger performStepSeek in the parent
-                                // But we don't wait for it - UI keeps moving
-                                onValueChangeFinished() // Using this as throttle trigger
+                                onValueChangeFinished()
                                 lastSeekTime = now
                             }
                         },
                         onDragEnd = {
                             isDragging = false
-                            // Final seek to exact position
                             onValueChangeFinished()
                         },
                         onDragCancel = {
