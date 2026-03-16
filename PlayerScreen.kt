@@ -780,7 +780,10 @@ fun SimpleDraggableProgressBar(
 ) {
     var dragStartX by remember { mutableStateOf(0f) }
     var savedPositionAtTouch by remember { mutableStateOf(0f) }
+    var hasPassedThreshold by remember { mutableStateOf(false) }
+    var isSeekModeActive by remember { mutableStateOf(false) }
     
+    val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     val safeDuration = if (duration > 0) duration else 1f
     val safePosition = position.coerceIn(0f, safeDuration)
     val progressFraction = (safePosition / safeDuration).coerceIn(0f, 1f)
@@ -813,16 +816,34 @@ fun SimpleDraggableProgressBar(
                 .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = { offset ->
-                            // Save starting position and X coordinate
+                            // Immediately enter seek mode when touching the seekbar
                             dragStartX = offset.x
                             savedPositionAtTouch = getFreshPosition().coerceIn(0f, safeDuration)
+                            hasPassedThreshold = false
+                            isSeekModeActive = true
+                            
+                            // Trigger seek mode start in parent
+                            onValueChange(savedPositionAtTouch)
                         },
                         onDrag = { change, _ ->
                             change.consume()
                             val currentX = change.position.x
                             val totalMovementX = currentX - dragStartX
                             
-                            // Calculate new position directly from drag movement
+                            // Check if we've passed the threshold
+                            if (!hasPassedThreshold) {
+                                if (abs(totalMovementX) > movementThresholdPx) {
+                                    hasPassedThreshold = true
+                                    // Reset reference point at threshold crossing for smoother behavior
+                                    savedPositionAtTouch = getFreshPosition().coerceIn(0f, safeDuration)
+                                    dragStartX = currentX
+                                } else {
+                                    // Still within threshold - don't update position
+                                    return@detectDragGestures
+                                }
+                            }
+                            
+                            // Once threshold is passed, calculate position normally
                             val deltaPosition = (totalMovementX / size.width) * safeDuration
                             val newPosition = (savedPositionAtTouch + deltaPosition)
                                 .coerceIn(0f, safeDuration)
@@ -836,9 +857,13 @@ fun SimpleDraggableProgressBar(
                             }
                         },
                         onDragEnd = {
+                            hasPassedThreshold = false
+                            isSeekModeActive = false
                             onValueChangeFinished()
                         },
                         onDragCancel = {
+                            hasPassedThreshold = false
+                            isSeekModeActive = false
                             onValueChangeFinished()
                         }
                     )
