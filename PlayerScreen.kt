@@ -33,6 +33,8 @@ import java.io.File
 import kotlin.math.abs
 import kotlin.math.sign
 
+// ==================== MPV VIEW ====================
+
 class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView(context, attrs) {
     
     override fun initOptions() {
@@ -76,6 +78,32 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
     override fun observeProperties() {}
 }
 
+// ==================== DATA CLASSES ====================
+
+private data class DragState(
+    val startX: Float = 0f,
+    val savedPosition: Float = 0f,
+    val hasPassedThreshold: Boolean = false
+)
+
+private data class SeekState(
+    val lastSeekTime: Long = 0L,
+    val lastHorizontalUpdateTime: Long = 0L,
+    val isSeekInProgress: Boolean = false
+)
+
+private data class TouchState(
+    val startTime: Long = 0L,
+    val startX: Float = 0f,
+    val startY: Float = 0f,
+    val isTouching: Boolean = false,
+    val isLongTap: Boolean = false,
+    val isHorizontalSwipe: Boolean = false,
+    val isVerticalSwipe: Boolean = false
+)
+
+// ==================== MAIN PLAYER SCREEN ====================
+
 @Composable
 fun PlayerScreen(
     videoPath: String? = null,
@@ -89,7 +117,7 @@ fun PlayerScreen(
     var savedPosition by remember { mutableStateOf<Double?>(null) }
     val coroutineScope = rememberCoroutineScope()
     
-    // Lifecycle observer for auto-pause with position saving
+    // Lifecycle observer
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -117,14 +145,12 @@ fun PlayerScreen(
     }
     
     Box(modifier = Modifier.fillMaxSize()) {
-        // MPV Player
         AndroidView(
             factory = { ctx ->
                 SimpleMPVView(ctx).apply {
                     mpvView = this
                     mpvInstance = this.mpv
                     
-                    // Initialize with proper paths
                     val filesDir = ctx.filesDir.path
                     val cacheDir = File(ctx.cacheDir, "mpv").apply { mkdirs() }.path
                     initialize(filesDir, cacheDir)
@@ -132,13 +158,11 @@ fun PlayerScreen(
                     videoPath?.let { path ->
                         playFile(path)
                         
-                        // Wait for video to load and get dimensions
                         coroutineScope.launch {
                             var attempts = 0
                             var duration = 0.0
                             
-                            // Keep checking until we get valid duration
-                            while (duration <= 0 && attempts < 50) { // 5 seconds max
+                            while (duration <= 0 && attempts < 50) {
                                 delay(100)
                                 duration = mpv.getPropertyDouble("duration") ?: 0.0
                                 attempts++
@@ -161,7 +185,6 @@ fun PlayerScreen(
             modifier = Modifier.fillMaxSize()
         )
         
-        // UI Overlay - Only show when video is loaded AND we have a valid MPV instance
         if (isVideoLoaded && mpvInstance != null) {
             PlayerOverlay(
                 mpv = mpvInstance!!,
@@ -170,6 +193,8 @@ fun PlayerScreen(
         }
     }
 }
+
+// ==================== PLAYER OVERLAY ====================
 
 @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -180,7 +205,7 @@ fun PlayerOverlay(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     
-    // Separate state for different UI elements to prevent blinking
+    // UI State
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
     var seekTargetTime by remember { mutableStateOf("00:00") }
@@ -188,33 +213,36 @@ fun PlayerOverlay(
     var isSpeedingUp by remember { mutableStateOf(false) }
     var showSeekbar by remember { mutableStateOf(true) }
     
+    // Seekbar State
     var seekbarPosition by remember { mutableStateOf(0f) }
     var seekbarDuration by remember { mutableStateOf(1f) }
     var isDragging by remember { mutableStateOf(false) }
     
+    // Seek State
     var isSeeking by remember { mutableStateOf(false) }
     var seekStartX by remember { mutableStateOf(0f) }
     var seekStartPosition by remember { mutableStateOf(0.0) }
     var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
     var seekDirection by remember { mutableStateOf("") }
-    var isSeekInProgress by remember { mutableStateOf(false) }
+    var seekState by remember { mutableStateOf(SeekState()) }
+    
+    // Touch State
+    var touchState by remember { mutableStateOf(TouchState()) }
+    
+    // UI State
+    var showVideoInfo by remember { mutableStateOf(true) }
+    var fileName by remember { mutableStateOf("RTFP") }
+    var userInteracting by remember { mutableStateOf(false) }
+    var showPlaybackFeedback by remember { mutableStateOf(false) }
+    var playbackFeedbackText by remember { mutableStateOf("") }
+    var showQuickSeekFeedback by remember { mutableStateOf(false) }
+    var quickSeekFeedbackText by remember { mutableStateOf("") }
+    
+    // Duration validity
+    var isDurationValid by remember { mutableStateOf(false) }
+    
+    // Constants
     val seekThrottleMs = 16L
-    
-    // Track pause state separately
-    var isPaused by remember { mutableStateOf(false) }
-    
-    // Throttling for horizontal swipe
-    var lastSeekTime by remember { mutableStateOf(0L) }
-    var lastHorizontalUpdateTime by remember { mutableStateOf(0L) }
-    
-    var touchStartTime by remember { mutableStateOf(0L) }
-    var touchStartX by remember { mutableStateOf(0f) }
-    var touchStartY by remember { mutableStateOf(0f) }
-    var isTouching by remember { mutableStateOf(false) }
-    var isLongTap by remember { mutableStateOf(false) }
-    var isHorizontalSwipe by remember { mutableStateOf(false) }
-    var isVerticalSwipe by remember { mutableStateOf(false) }
-    
     val longTapThreshold = 300L
     val horizontalSwipeThreshold = 30f
     val verticalSwipeThreshold = 40f
@@ -222,25 +250,7 @@ fun PlayerOverlay(
     val maxHorizontalMovement = 50f
     val quickSeekAmount = 5
     
-    var showVideoInfo by remember { mutableStateOf(true) }
-    var fileName by remember { mutableStateOf("RTFP") }
-    
-    var userInteracting by remember { mutableStateOf(false) }
-    
-    var showPlaybackFeedback by remember { mutableStateOf(false) }
-    var playbackFeedbackText by remember { mutableStateOf("") }
-    
-    var showQuickSeekFeedback by remember { mutableStateOf(false) }
-    var quickSeekFeedbackText by remember { mutableStateOf("") }
-    
-    // Track if duration is valid for seekbar
-    var isDurationValid by remember { mutableStateOf(false) }
-    
-    // Throttle for progress bar seeks
-    var lastSeekTriggerTime by remember { mutableStateOf(0L) }
-    val progressBarSeekThrottleMs = 100L
-    
-    // Auto-hide seekbar with proper lifecycle
+    // Auto-hide seekbar
     LaunchedEffect(showSeekbar, userInteracting) {
         if (showSeekbar && !userInteracting) {
             delay(4000)
@@ -251,15 +261,14 @@ fun PlayerOverlay(
         }
     }
     
-    // Wait for valid duration before starting
+    // Wait for duration
     LaunchedEffect(Unit) {
-        // Wait for duration to be available
         var duration = 0.0
         var attempts = 0
-        while (duration <= 1.0 && attempts < 30) { // Wait until duration > 1 second
+        while (duration <= 1.0 && attempts < 30) {
             duration = mpv.getPropertyDouble("duration") ?: 0.0
             if (duration > 1.0) {
-                Log.d("PlayerDebug", "Duration finally available: $duration")
+                Log.d("PlayerDebug", "Duration available: $duration")
                 seekbarDuration = duration.toFloat()
                 totalTime = formatTimeSimple(duration)
                 isDurationValid = true
@@ -270,7 +279,44 @@ fun PlayerOverlay(
         }
     }
     
-    // Utility functions
+    // Get filename
+    LaunchedEffect(Unit) {
+        fileName = getFileName(context, mpv)
+        showVideoInfo = true
+        showSeekbar = true
+    }
+    
+    // Update time
+    LaunchedEffect(Unit) {
+        var duration = mpv.getPropertyDouble("duration") ?: 0.0
+        while (duration <= 1.0) {
+            delay(100)
+            duration = mpv.getPropertyDouble("duration") ?: 0.0
+        }
+        
+        while (isActive) {
+            val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
+            val currentDuration = mpv.getPropertyDouble("duration") ?: duration
+            
+            if (!isSeeking && !isDragging) {
+                currentTime = formatTimeSimple(currentPos)
+                seekbarPosition = currentPos.toFloat()
+            }
+            
+            totalTime = formatTimeSimple(currentDuration)
+            seekbarDuration = currentDuration.toFloat()
+            
+            delay(100)
+        }
+    }
+    
+    // Speed control
+    LaunchedEffect(isSpeedingUp) {
+        mpv.setPropertyDouble("speed", if (isSpeedingUp) 2.0 else 1.0)
+    }
+    
+    // ==================== HELPER FUNCTIONS ====================
+    
     fun cancelAutoHide() {
         userInteracting = true
         coroutineScope.launch {
@@ -293,65 +339,61 @@ fun PlayerOverlay(
         }
     }
     
-    // For HORIZONTAL SWIPE - smooth seeking (frame-by-frame, no rounding) with 50ms throttle
     fun performSmoothSeek(targetPosition: Double) {
-        if (isSeekInProgress) return
-        isSeekInProgress = true
-        // NO ROUNDING - smooth for horizontal swipe
+        if (seekState.isSeekInProgress) return
+        
+        val now = System.currentTimeMillis()
+        if (now - seekState.lastSeekTime < 33) return
+        
+        seekState = seekState.copy(isSeekInProgress = true, lastSeekTime = now)
         mpv.command("seek", targetPosition.toString(), "absolute", "exact")
+        
         coroutineScope.launch {
             delay(seekThrottleMs)
-            isSeekInProgress = false
+            seekState = seekState.copy(isSeekInProgress = false)
         }
     }
     
-    // For PROGRESS BAR - 1-second increments
     fun performStepSeek(targetPosition: Double) {
-        if (isSeekInProgress) return
-        isSeekInProgress = true
-        // Round to nearest second for progress bar
+        if (seekState.isSeekInProgress) return
+        
+        seekState = seekState.copy(isSeekInProgress = true)
         val roundedPosition = (targetPosition + 0.5).toInt().toDouble()
         mpv.command("seek", roundedPosition.toString(), "absolute", "exact")
+        
         coroutineScope.launch {
             delay(seekThrottleMs)
-            isSeekInProgress = false
+            seekState = seekState.copy(isSeekInProgress = false)
         }
     }
     
-    fun getFreshPosition(): Float {
-        return (mpv.getPropertyDouble("time-pos") ?: 0.0).toFloat()
-    }
+    fun getFreshPosition(): Float = (mpv.getPropertyDouble("time-pos") ?: 0.0).toFloat()
     
     fun performQuickSeek(seconds: Int) {
-        val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
-        val duration = mpv.getPropertyDouble("duration") ?: 0.0
-        
         quickSeekFeedbackText = if (seconds > 0) "+$seconds" else "$seconds"
         showQuickSeekFeedback = true
         coroutineScope.launch {
             delay(1000)
             showQuickSeekFeedback = false
         }
-        
         mpv.command("seek", seconds.toString(), "relative", "exact")
     }
     
     fun handleTap() {
-        val currentPaused = mpv.getPropertyBoolean("pause") ?: false
+        val currentPaused = mpv.getPropertyBoolean("pause") == true
         if (currentPaused) {
             coroutineScope.launch {
                 val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
                 mpv.command("seek", currentPos.toString(), "absolute", "exact")
                 delay(100)
                 mpv.setPropertyBoolean("pause", false)
-                isPaused = false
             }
             showPlaybackFeedback("Resume")
         } else {
             mpv.setPropertyBoolean("pause", true)
-            isPaused = true
             showPlaybackFeedback("Pause")
         }
+        
         if (showSeekbar) {
             showSeekbar = false
             showVideoInfo = false
@@ -361,37 +403,35 @@ fun PlayerOverlay(
     }
     
     fun startLongTapDetection() {
-        isTouching = true
-        touchStartTime = System.currentTimeMillis()
+        touchState = touchState.copy(
+            isTouching = true,
+            startTime = System.currentTimeMillis()
+        )
+        
         coroutineScope.launch {
             delay(longTapThreshold)
-            if (isTouching && !isHorizontalSwipe && !isVerticalSwipe) {
-                isLongTap = true
+            if (touchState.isTouching && !touchState.isHorizontalSwipe && !touchState.isVerticalSwipe) {
+                touchState = touchState.copy(isLongTap = true)
                 isSpeedingUp = true
-                mpv.setPropertyDouble("speed", 2.0)
             }
         }
     }
     
     fun checkForSwipeDirection(currentX: Float, currentY: Float): String {
-        if (isHorizontalSwipe || isVerticalSwipe || isLongTap) return ""
+        if (touchState.isHorizontalSwipe || touchState.isVerticalSwipe || touchState.isLongTap) return ""
         
-        val deltaX = abs(currentX - touchStartX)
-        val deltaY = abs(currentY - touchStartY)
+        val deltaX = abs(currentX - touchState.startX)
+        val deltaY = abs(currentY - touchState.startY)
         
-        if (deltaX > horizontalSwipeThreshold && deltaX > deltaY && deltaY < maxVerticalMovement) {
-            return "horizontal"
+        return when {
+            deltaX > horizontalSwipeThreshold && deltaX > deltaY && deltaY < maxVerticalMovement -> "horizontal"
+            deltaY > verticalSwipeThreshold && deltaY > deltaX && deltaX < maxHorizontalMovement -> "vertical"
+            else -> ""
         }
-        
-        if (deltaY > verticalSwipeThreshold && deltaY > deltaX && deltaX < maxHorizontalMovement) {
-            return "vertical"
-        }
-        
-        return ""
     }
     
     fun startHorizontalSeeking(startX: Float) {
-        isHorizontalSwipe = true
+        touchState = touchState.copy(isHorizontalSwipe = true)
         cancelAutoHide()
         seekStartX = startX
         seekStartPosition = mpv.getPropertyDouble("time-pos") ?: 0.0
@@ -403,26 +443,16 @@ fun PlayerOverlay(
         
         if (wasPlayingBeforeSeek) {
             mpv.setPropertyBoolean("pause", true)
-            isPaused = true
         }
         
-        // Reset throttling timers
-        lastSeekTime = 0L
-        lastHorizontalUpdateTime = 0L
+        seekState = SeekState()
     }
     
     fun startVerticalSwipe(startY: Float) {
-        isVerticalSwipe = true
+        touchState = touchState.copy(isVerticalSwipe = true)
         cancelAutoHide()
-        val deltaY = startY - touchStartY
-        
-        if (deltaY < 0) {
-            seekDirection = "+"
-            performQuickSeek(quickSeekAmount)
-        } else {
-            seekDirection = "-"
-            performQuickSeek(-quickSeekAmount)
-        }
+        val deltaY = startY - touchState.startY
+        performQuickSeek(if (deltaY < 0) quickSeekAmount else -quickSeekAmount)
     }
     
     fun handleHorizontalSeeking(currentX: Float) {
@@ -440,19 +470,13 @@ fun PlayerOverlay(
         
         val now = System.currentTimeMillis()
         
-        // Update UI every 16ms (60fps) for smooth visual feedback
-        if (now - lastHorizontalUpdateTime > 16) {
+        if (now - seekState.lastHorizontalUpdateTime > 16) {
             currentTime = formatTimeSimple(clampedPosition)
-            // UPDATE SEEKBAR POSITION IN REAL-TIME
             seekbarPosition = clampedPosition.toFloat()
-            lastHorizontalUpdateTime = now
+            seekState = seekState.copy(lastHorizontalUpdateTime = now)
         }
         
-        // Throttle MPV seeks to every 50ms (20fps) to balance performance and smoothness
-        if (now - lastSeekTime > 33) {
-            performSmoothSeek(clampedPosition)
-            lastSeekTime = now
-        }
+        performSmoothSeek(clampedPosition)
     }
     
     fun endHorizontalSeeking() {
@@ -464,7 +488,6 @@ fun PlayerOverlay(
                 coroutineScope.launch {
                     delay(100)
                     mpv.setPropertyBoolean("pause", false)
-                    isPaused = false
                 }
             }
             
@@ -478,209 +501,80 @@ fun PlayerOverlay(
     }
     
     fun endVerticalSwipe() {
-        isVerticalSwipe = false
+        touchState = touchState.copy(isVerticalSwipe = false)
     }
     
     fun endTouch() {
-        val touchDuration = System.currentTimeMillis() - touchStartTime
-        isTouching = false
+        val touchDuration = System.currentTimeMillis() - touchState.startTime
         
-        if (isLongTap) {
-            isLongTap = false
+        if (touchState.isLongTap) {
             isSpeedingUp = false
-            mpv.setPropertyDouble("speed", 1.0)
-        } else if (isHorizontalSwipe) {
+        } else if (touchState.isHorizontalSwipe) {
             endHorizontalSeeking()
-            isHorizontalSwipe = false
-        } else if (isVerticalSwipe) {
+        } else if (touchState.isVerticalSwipe) {
             endVerticalSwipe()
-            isVerticalSwipe = false
         } else if (touchDuration < 150) {
             handleTap()
         }
+        
+        touchState = TouchState()
         isHorizontalSwipe = false
         isVerticalSwipe = false
         isLongTap = false
     }
     
-    // Get filename
-    LaunchedEffect(Unit) {
-        val intent = (context as? android.app.Activity)?.intent
-        fileName = when {
-            intent?.action == Intent.ACTION_SEND -> {
-                getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context, mpv)
-            }
-            intent?.action == Intent.ACTION_VIEW -> {
-                getFileNameFromUri(intent.data, context, mpv)
-            }
-            else -> {
-                getBestAvailableFileName(context, mpv)
-            }
-        }
-        
-        showVideoInfo = true
-        showSeekbar = true
-    }
-    
-    // Speed control backup
-    LaunchedEffect(isSpeedingUp) {
-        if (isSpeedingUp) {
-            mpv.setPropertyDouble("speed", 2.0)
-        } else {
-            mpv.setPropertyDouble("speed", 1.0)
-        }
-    }
-    
-    // Update time - separate coroutine for just the time display (runs less frequently)
-    LaunchedEffect(Unit) {
-        // Wait for duration to be valid
-        var duration = mpv.getPropertyDouble("duration") ?: 0.0
-        while (duration <= 1.0) {
-            delay(100)
-            duration = mpv.getPropertyDouble("duration") ?: 0.0
-        }
-        
-        // Update time display (slower refresh rate to prevent blinking)
-        while (isActive) {
-            val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
-            val currentDuration = mpv.getPropertyDouble("duration") ?: duration
-            
-            // Only update time display from video when NOT dragging
-            if (!isSeeking && !isDragging) {
-                currentTime = formatTimeSimple(currentPos)
-            }
-            
-            // Update total time occasionally
-            totalTime = formatTimeSimple(currentDuration)
-            
-            delay(500) // Update time display every 500ms to prevent blinking
-        }
-    }
-    
-    // Update seekbar position - separate coroutine for smooth seekbar movement
-    LaunchedEffect(Unit) {
-        // Wait for duration to be valid
-        var duration = mpv.getPropertyDouble("duration") ?: 0.0
-        while (duration <= 1.0) {
-            delay(100)
-            duration = mpv.getPropertyDouble("duration") ?: 0.0
-        }
-        
-        // Update seekbar position (faster refresh rate for smooth animation)
-        while (isActive) {
-            val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
-            val currentDuration = mpv.getPropertyDouble("duration") ?: duration
-            
-            // Update seekbar position from video when NOT dragging
-            if (!isSeeking && !isDragging) {
-                seekbarPosition = currentPos.toFloat()
-            }
-            
-            seekbarDuration = currentDuration.toFloat()
-            
-            delay(50) // Update seekbar every 50ms for smooth movement
-        }
-    }
-    
-    // Update pause state
-    LaunchedEffect(Unit) {
-        while (isActive) {
-            isPaused = mpv.getPropertyBoolean("pause") == true
-            delay(200)
-        }
-    }
-    
-    // Progress bar handlers
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
-        
-        // UI state management (showing/hiding elements)
         if (!isSeeking) {
             isSeeking = true
-            wasPlayingBeforeSeek = !isPaused
+            wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
             showSeekTime = true
             showSeekbar = true
             showVideoInfo = true
             
             if (wasPlayingBeforeSeek) {
                 mpv.setPropertyBoolean("pause", true)
-                isPaused = true
             }
         }
         isDragging = true
-        
-        // Update UI positions IMMEDIATELY
         val oldPosition = seekbarPosition
         seekbarPosition = newPosition
         seekDirection = if (newPosition > oldPosition) "+" else "-"
+        seekTargetTime = formatTimeSimple(newPosition.toDouble())
+        currentTime = formatTimeSimple(newPosition.toDouble())
         
-        // Update time display immediately based on drag position
-        val targetPosition = newPosition.toDouble()
-        seekTargetTime = formatTimeSimple(targetPosition)
-        currentTime = formatTimeSimple(targetPosition)
-        
-        // Throttle actual MPV seeks
-        val now = System.currentTimeMillis()
-        if (now - lastSeekTriggerTime >= progressBarSeekThrottleMs) {
-            val roundedPosition = (targetPosition + 0.5).toInt().toDouble()
-            performStepSeek(roundedPosition)
-            lastSeekTriggerTime = now
-        }
+        performStepSeek(newPosition.toDouble())
     }
     
     fun handleDragFinished() {
-        // Get the final position from UI
-        val finalPosition = seekbarPosition.toDouble()
-        
-        // Round to nearest second for actual seek
-        val roundedPosition = (finalPosition + 0.5).toInt().toDouble()
-        
-        // Perform the final seek
-        performStepSeek(roundedPosition)
-        
-        // Reset states
         isDragging = false
         if (wasPlayingBeforeSeek) {
             coroutineScope.launch {
                 delay(100)
                 mpv.setPropertyBoolean("pause", false)
-                isPaused = false
             }
         }
         isSeeking = false
         showSeekTime = false
         wasPlayingBeforeSeek = false
         seekDirection = ""
-        lastSeekTriggerTime = 0L
     }
     
+    // Alpha values
     val videoInfoTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
     val videoInfoBackgroundAlpha = if (isSeeking || isDragging) 0.0f else 0.8f
     val timeDisplayTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
     val timeDisplayBackgroundAlpha = if (isSeeking || isDragging) 0.0f else 0.8f
     
+    // ==================== UI ====================
+    
     Box(modifier = modifier.fillMaxSize()) {
         // Gesture area
         Box(modifier = Modifier.fillMaxSize()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.05f)
-                    .align(Alignment.TopStart)
-            )
+            Box(modifier = Modifier.fillMaxWidth().fillMaxHeight(0.05f).align(Alignment.TopStart))
             
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.95f)
-                    .align(Alignment.BottomStart)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.05f)
-                        .fillMaxHeight()
-                        .align(Alignment.CenterStart)
-                )
+            Box(modifier = Modifier.fillMaxWidth().fillMaxHeight(0.95f).align(Alignment.BottomStart)) {
+                Box(modifier = Modifier.fillMaxWidth(0.05f).fillMaxHeight().align(Alignment.CenterStart))
                 
                 Box(
                     modifier = Modifier
@@ -690,18 +584,20 @@ fun PlayerOverlay(
                         .pointerInteropFilter { event ->
                             when (event.action) {
                                 MotionEvent.ACTION_DOWN -> {
-                                    touchStartX = event.x
-                                    touchStartY = event.y
+                                    touchState = touchState.copy(
+                                        startX = event.x,
+                                        startY = event.y
+                                    )
                                     startLongTapDetection()
                                     true
                                 }
                                 MotionEvent.ACTION_MOVE -> {
-                                    if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
+                                    if (!touchState.isHorizontalSwipe && !touchState.isVerticalSwipe && !touchState.isLongTap) {
                                         when (checkForSwipeDirection(event.x, event.y)) {
                                             "horizontal" -> startHorizontalSeeking(event.x)
                                             "vertical" -> startVerticalSwipe(event.y)
                                         }
-                                    } else if (isHorizontalSwipe) {
+                                    } else if (touchState.isHorizontalSwipe) {
                                         handleHorizontalSeeking(event.x)
                                     }
                                     true
@@ -715,12 +611,7 @@ fun PlayerOverlay(
                         }
                 )
                 
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(0.05f)
-                        .fillMaxHeight()
-                        .align(Alignment.CenterEnd)
-                )
+                Box(modifier = Modifier.fillMaxWidth(0.05f).fillMaxHeight().align(Alignment.CenterEnd))
             }
         }
         
@@ -756,9 +647,10 @@ fun PlayerOverlay(
                             )
                         }
                     }
+                    
                     Box(modifier = Modifier.fillMaxWidth().height(48.dp)) {
                         if (isDurationValid) {
-                            SimpleDraggableProgressBar(
+                            OptimizedDraggableProgressBar(
                                 position = seekbarPosition,
                                 duration = seekbarDuration,
                                 onValueChange = { handleProgressBarDrag(it) },
@@ -767,7 +659,6 @@ fun PlayerOverlay(
                                 modifier = Modifier.fillMaxSize().height(48.dp)
                             )
                         } else {
-                            // Show static progress bar while loading
                             Box(modifier = Modifier.fillMaxSize()) {
                                 Box(
                                     modifier = Modifier
@@ -835,9 +726,11 @@ fun PlayerOverlay(
     }
 }
 
+// ==================== OPTIMIZED PROGRESS BAR ====================
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-fun SimpleDraggableProgressBar(
+fun OptimizedDraggableProgressBar(
     position: Float,
     duration: Float,
     onValueChange: (Float) -> Unit,
@@ -845,15 +738,14 @@ fun SimpleDraggableProgressBar(
     getFreshPosition: () -> Float,
     modifier: Modifier = Modifier
 ) {
-    var isDragging by remember { mutableStateOf(false) }
-    var dragStartX by remember { mutableStateOf(0f) }
-    var positionAtDragStart by remember { mutableStateOf(0f) }
-    var lastSeekTime by remember { mutableStateOf(0L) }
-    val seekThrottleMs = 100L // Throttle seeks to every 100ms
+    val safeDuration = remember(duration) { if (duration > 0) duration else 1f }
     
-    val safeDuration = if (duration > 0) duration else 1f
-    val safePosition = position.coerceIn(0f, safeDuration)
-    val progressFraction = (safePosition / safeDuration).coerceIn(0f, 1f)
+    val progressFraction = remember(position, safeDuration) {
+        (position.coerceIn(0f, safeDuration) / safeDuration).coerceIn(0f, 1f)
+    }
+    
+    val dragState = remember { mutableStateOf(DragState()) }
+    val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     
     Box(modifier = modifier.height(48.dp)) {
         // Background bar
@@ -865,13 +757,13 @@ fun SimpleDraggableProgressBar(
                 .background(Color.Gray.copy(alpha = 0.6f))
         )
         
-        // Progress bar - moves instantly with finger
+        // Progress bar
         Box(
             modifier = Modifier
                 .fillMaxWidth(fraction = progressFraction)
                 .height(4.dp)
                 .align(Alignment.CenterStart)
-                .background(if (isDragging) Color.Cyan else Color.White)
+                .background(Color.White)
         )
         
         // Drag handle area
@@ -880,43 +772,49 @@ fun SimpleDraggableProgressBar(
                 .fillMaxWidth()
                 .height(48.dp)
                 .align(Alignment.CenterStart)
-                .pointerInput(Unit) {
+                .pointerInput(movementThresholdPx, safeDuration) {
                     detectDragGestures(
                         onDragStart = { offset ->
-                            dragStartX = offset.x
-                            positionAtDragStart = getFreshPosition().coerceIn(0f, safeDuration)
-                            isDragging = true
-                            lastSeekTime = 0L
-                            
-                            // Immediately send the starting position
-                            onValueChange(positionAtDragStart)
+                            dragState.value = DragState(
+                                startX = offset.x,
+                                savedPosition = getFreshPosition().coerceIn(0f, safeDuration),
+                                hasPassedThreshold = false
+                            )
                         },
                         onDrag = { change, _ ->
                             change.consume()
+                            val currentState = dragState.value
                             val currentX = change.position.x
+                            val totalMovementX = currentX - currentState.startX
                             
-                            // Calculate new position based purely on finger movement
-                            val deltaX = currentX - dragStartX
-                            val deltaPosition = (deltaX / size.width) * safeDuration
-                            val newPosition = (positionAtDragStart + deltaPosition)
+                            if (!currentState.hasPassedThreshold) {
+                                if (abs(totalMovementX) <= movementThresholdPx) {
+                                    return@detectDragGestures
+                                }
+                                dragState.value = currentState.copy(hasPassedThreshold = true)
+                            }
+                            
+                            val movementBeyondThreshold = maxOf(0f, abs(totalMovementX) - movementThresholdPx)
+                            val effectiveMovement = totalMovementX.sign * movementBeyondThreshold
+                            
+                            val newPosition = (currentState.savedPosition + 
+                                (effectiveMovement / size.width) * safeDuration)
                                 .coerceIn(0f, safeDuration)
                             
-                            // ALWAYS update UI position immediately
-                            onValueChange(newPosition)
+                            // Round to nearest second for progress bar
+                            val roundedSeconds = (newPosition + 0.5f).toInt()
+                            val roundedPosition = roundedSeconds.toFloat()
                             
-                            // Throttle actual MPV seeks separately
-                            val now = System.currentTimeMillis()
-                            if (now - lastSeekTime >= seekThrottleMs) {
-                                onValueChangeFinished()
-                                lastSeekTime = now
+                            if (abs(roundedPosition - position) > 0.1f) {
+                                onValueChange(roundedPosition)
                             }
                         },
                         onDragEnd = {
-                            isDragging = false
+                            dragState.value = DragState()
                             onValueChangeFinished()
                         },
                         onDragCancel = {
-                            isDragging = false
+                            dragState.value = DragState()
                             onValueChangeFinished()
                         }
                     )
@@ -924,6 +822,8 @@ fun SimpleDraggableProgressBar(
         )
     }
 }
+
+// ==================== UTILITY FUNCTIONS ====================
 
 private fun formatTimeSimple(seconds: Double): String {
     val totalSeconds = seconds.toInt()
@@ -937,8 +837,25 @@ private fun formatTimeSimple(seconds: Double): String {
     }
 }
 
+private fun getFileName(context: Context, mpv: MPV): String {
+    val intent = (context as? android.app.Activity)?.intent
+    
+    return when {
+        intent?.action == Intent.ACTION_SEND -> {
+            getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context, mpv)
+        }
+        intent?.action == Intent.ACTION_VIEW -> {
+            getFileNameFromUri(intent.data, context, mpv)
+        }
+        else -> {
+            getBestAvailableFileName(context, mpv)
+        }
+    }
+}
+
 private fun getFileNameFromUri(uri: Uri?, context: Context, mpv: MPV): String {
     if (uri == null) return getBestAvailableFileName(context, mpv)
+    
     return when {
         uri.scheme == "file" -> uri.lastPathSegment?.substringBeforeLast(".") ?: getBestAvailableFileName(context, mpv)
         uri.scheme == "content" -> getDisplayNameFromContentUri(uri, context) ?: getBestAvailableFileName(context, mpv)
@@ -951,10 +868,11 @@ private fun getDisplayNameFromContentUri(uri: Uri, context: Context): String? {
         context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) {
                 val displayNameIndex = cursor.getColumnIndex("_display_name")
-                val displayName = if (displayNameIndex != -1) {
+                if (displayNameIndex != -1) {
                     cursor.getString(displayNameIndex)?.substringBeforeLast(".")
-                } else null
-                displayName ?: uri.lastPathSegment?.substringBeforeLast(".")
+                } else {
+                    uri.lastPathSegment?.substringBeforeLast(".")
+                }
             } else null
         }
     } catch (e: Exception) {
@@ -964,12 +882,14 @@ private fun getDisplayNameFromContentUri(uri: Uri, context: Context): String? {
 
 private fun getBestAvailableFileName(context: Context, mpv: MPV): String {
     val mediaTitle = mpv.getPropertyString("media-title")
-    if (mediaTitle != null && mediaTitle != "Video" && mediaTitle.isNotBlank()) {
+    if (!mediaTitle.isNullOrBlank() && mediaTitle != "Video") {
         return mediaTitle.substringBeforeLast(".")
     }
+    
     val mpvPath = mpv.getPropertyString("path")
-    if (mpvPath != null && mpvPath.isNotBlank()) {
+    if (!mpvPath.isNullOrBlank()) {
         return mpvPath.substringAfterLast("/").substringBeforeLast(".").ifEmpty { "RTFP" }
     }
+    
     return "RTFP"
 }
