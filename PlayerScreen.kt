@@ -232,6 +232,44 @@ fun PlayerOverlay(
     // Track if duration is valid for seekbar
     var isDurationValid by remember { mutableStateOf(false) }
     
+    // B-frame optimization state
+    var originalSkipLoopFilter by remember { mutableStateOf("all") }
+    var originalSkipIDCT by remember { mutableStateOf("all") }
+    var originalHrSeek by remember { mutableStateOf("yes") }
+    var seekingOptimized by remember { mutableStateOf(false) }
+    
+    // Function to disable ONLY B-frames during seeking (keep I and P frames)
+    fun enableSeekingOptimizations() {
+        if (seekingOptimized) return
+        
+        // Save original values
+        originalSkipLoopFilter = mpv.getPropertyString("vd-lavc-skiploopfilter") ?: "all"
+        originalSkipIDCT = mpv.getPropertyString("vd-lavc-skipidct") ?: "all"
+        originalHrSeek = mpv.getPropertyString("hr-seek") ?: "yes"
+        
+        // Disable ONLY B-frames, keep P-frames and I-frames
+        mpv.setOptionString("vd-lavc-skiploopfilter", "nonref") // Skip non-reference frames (B-frames)
+        mpv.setOptionString("vd-lavc-skipidct", "nonref")       // Skip IDCT for non-reference frames
+        mpv.setOptionString("vd-lavc-fast", "yes")              // Keep fast decoding
+        mpv.setOptionString("hr-seek", "yes")                   // Keep precise seeking (uses P-frames)
+        
+        seekingOptimized = true
+        Log.d("PlayerDebug", "Seeking optimizations ENABLED - B-frames disabled, P-frames kept")
+    }
+    
+    fun disableSeekingOptimizations() {
+        if (!seekingOptimized) return
+        
+        // Restore normal playback settings
+        mpv.setOptionString("vd-lavc-skiploopfilter", originalSkipLoopFilter)
+        mpv.setOptionString("vd-lavc-skipidct", originalSkipIDCT)
+        mpv.setOptionString("vd-lavc-fast", "yes")
+        mpv.setOptionString("hr-seek", originalHrSeek)
+        
+        seekingOptimized = false
+        Log.d("PlayerDebug", "Seeking optimizations DISABLED - B-frames restored")
+    }
+    
     // FIXED: Auto-hide seekbar with proper lifecycle - no more job leaks
     LaunchedEffect(showSeekbar, userInteracting) {
         if (showSeekbar && !userInteracting) {
@@ -286,7 +324,7 @@ fun PlayerOverlay(
         }
     }
     
-    // For HORIZONTAL SWIPE - smooth seeking (frame-by-frame, no rounding) with 50ms throttle
+    // For HORIZONTAL SWIPE - smooth seeking with B-frames disabled
     fun performSmoothSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         isSeekInProgress = true
@@ -298,7 +336,7 @@ fun PlayerOverlay(
         }
     }
     
-    // For PROGRESS BAR - 1-second increments
+    // For PROGRESS BAR - 1-second increments with B-frames disabled
     fun performStepSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         isSeekInProgress = true
@@ -382,6 +420,7 @@ fun PlayerOverlay(
     }
     
     fun startHorizontalSeeking(startX: Float) {
+        enableSeekingOptimizations() // Disable B-frames for faster seeking
         isHorizontalSwipe = true
         cancelAutoHide()
         seekStartX = startX
@@ -454,7 +493,10 @@ fun PlayerOverlay(
                 coroutineScope.launch {
                     delay(100)
                     mpv.setPropertyBoolean("pause", false)
+                    disableSeekingOptimizations() // Restore B-frames after unpausing
                 }
+            } else {
+                disableSeekingOptimizations() // Restore B-frames immediately
             }
             
             isSeeking = false
@@ -547,10 +589,11 @@ fun PlayerOverlay(
         }
     }
     
-    // Progress bar handlers
+    // Progress bar handlers with B-frame optimization
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
+            enableSeekingOptimizations() // Disable B-frames for faster seeking
             isSeeking = true
             wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
             showSeekTime = true
@@ -579,7 +622,10 @@ fun PlayerOverlay(
             coroutineScope.launch {
                 delay(100)
                 mpv.setPropertyBoolean("pause", false)
+                disableSeekingOptimizations() // Restore B-frames after unpausing
             }
+        } else {
+            disableSeekingOptimizations() // Restore B-frames immediately
         }
         isSeeking = false
         showSeekTime = false
@@ -780,10 +826,7 @@ fun SimpleDraggableProgressBar(
 ) {
     var dragStartX by remember { mutableStateOf(0f) }
     var savedPositionAtTouch by remember { mutableStateOf(0f) }
-    var hasPassedThreshold by remember { mutableStateOf(false) }
-    var isSeekModeActive by remember { mutableStateOf(false) }
     
-    val movementThresholdPx = with(LocalDensity.current) { 25.dp.toPx() }
     val safeDuration = if (duration > 0) duration else 1f
     val safePosition = position.coerceIn(0f, safeDuration)
     val progressFraction = (safePosition / safeDuration).coerceIn(0f, 1f)
@@ -816,34 +859,16 @@ fun SimpleDraggableProgressBar(
                 .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = { offset ->
-                            // Immediately enter seek mode when touching the seekbar
+                            // Save starting position and X coordinate
                             dragStartX = offset.x
                             savedPositionAtTouch = getFreshPosition().coerceIn(0f, safeDuration)
-                            hasPassedThreshold = false
-                            isSeekModeActive = true
-                            
-                            // Trigger seek mode start in parent
-                            onValueChange(savedPositionAtTouch)
                         },
                         onDrag = { change, _ ->
                             change.consume()
                             val currentX = change.position.x
                             val totalMovementX = currentX - dragStartX
                             
-                            // Check if we've passed the threshold
-                            if (!hasPassedThreshold) {
-                                if (abs(totalMovementX) > movementThresholdPx) {
-                                    hasPassedThreshold = true
-                                    // Reset reference point at threshold crossing for smoother behavior
-                                    savedPositionAtTouch = getFreshPosition().coerceIn(0f, safeDuration)
-                                    dragStartX = currentX
-                                } else {
-                                    // Still within threshold - don't update position
-                                    return@detectDragGestures
-                                }
-                            }
-                            
-                            // Once threshold is passed, calculate position normally
+                            // Calculate new position directly from drag movement
                             val deltaPosition = (totalMovementX / size.width) * safeDuration
                             val newPosition = (savedPositionAtTouch + deltaPosition)
                                 .coerceIn(0f, safeDuration)
@@ -857,13 +882,9 @@ fun SimpleDraggableProgressBar(
                             }
                         },
                         onDragEnd = {
-                            hasPassedThreshold = false
-                            isSeekModeActive = false
                             onValueChangeFinished()
                         },
                         onDragCancel = {
-                            hasPassedThreshold = false
-                            isSeekModeActive = false
                             onValueChangeFinished()
                         }
                     )
