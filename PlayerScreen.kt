@@ -40,11 +40,6 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         mpv.setOptionString("vo", "gpu")
         mpv.setOptionString("profile", "fast")
         mpv.setOptionString("keepaspect", "yes")
-        
-        // Define a seeking profile that skips B-frames
-        mpv.command("define-profile", "seek-fast", "vd-lavc-skiploopfilter=nonref")
-        mpv.command("define-profile", "seek-fast", "vd-lavc-skipidct=nonref")
-        mpv.command("define-profile", "seek-fast", "vd-lavc-fast=yes")
     }
 
     override fun postInitOptions() {
@@ -237,57 +232,11 @@ fun PlayerOverlay(
     // Track if duration is valid for seekbar
     var isDurationValid by remember { mutableStateOf(false) }
     
-    // B-frame optimization state - FIXED
-    var originalSkipLoopFilter by remember { mutableStateOf("all") }
-    var originalSkipIDCT by remember { mutableStateOf("all") }
-    var originalVDLavcFast by remember { mutableStateOf("yes") }
-    var seekingOptimized by remember { mutableStateOf(false) }
+    // NEW: Track original frame drop setting for seekbar seeking only
+    var originalHrSeekFramedrop by remember { mutableStateOf("no") }
+    var isSeekbarDragging by remember { mutableStateOf(false) }
     
-    // Function to disable ONLY B-frames during seeking (FIXED - uses command not setOption)
-    fun enableSeekingOptimizations() {
-        if (seekingOptimized) return
-        
-        // Save original values
-        originalSkipLoopFilter = mpv.getPropertyString("vd-lavc-skiploopfilter") ?: "all"
-        originalSkipIDCT = mpv.getPropertyString("vd-lavc-skipidct") ?: "all"
-        originalVDLavcFast = mpv.getPropertyString("vd-lavc-fast") ?: "yes"
-        
-        // Apply profile that skips B-frames (defined in SimpleMPVView)
-        mpv.command("apply-profile", "seek-fast")
-        
-        // Force a video output reload to apply changes
-        mpv.command("vf", "toggle")
-        mpv.command("vf", "toggle")
-        
-        // Force a seek to current position to refresh decoding
-        val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
-        mpv.command("seek", currentPos.toString(), "absolute", "exact")
-        
-        seekingOptimized = true
-        Log.d("PlayerDebug", "Seeking optimizations ENABLED - B-frames disabled")
-    }
-    
-    fun disableSeekingOptimizations() {
-        if (!seekingOptimized) return
-        
-        // Restore normal playback settings
-        mpv.command("set", "vd-lavc-skiploopfilter", originalSkipLoopFilter)
-        mpv.command("set", "vd-lavc-skipidct", originalSkipIDCT)
-        mpv.command("set", "vd-lavc-fast", originalVDLavcFast)
-        
-        // Force a video output reload to apply changes
-        mpv.command("vf", "toggle")
-        mpv.command("vf", "toggle")
-        
-        // Force a seek to current position to refresh decoding
-        val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
-        mpv.command("seek", currentPos.toString(), "absolute", "exact")
-        
-        seekingOptimized = false
-        Log.d("PlayerDebug", "Seeking optimizations DISABLED - B-frames restored")
-    }
-    
-    // Auto-hide seekbar with proper lifecycle
+    // Auto-hide seekbar
     LaunchedEffect(showSeekbar, userInteracting) {
         if (showSeekbar && !userInteracting) {
             delay(4000)
@@ -340,7 +289,26 @@ fun PlayerOverlay(
         }
     }
     
-    // For HORIZONTAL SWIPE - smooth seeking with B-frames disabled
+    // NEW: Enable frame skipping ONLY for seekbar seeking
+    fun enableSeekbarFrameSkipping() {
+        if (!isSeekbarDragging) {
+            originalHrSeekFramedrop = mpv.getPropertyString("hr-seek-framedrop") ?: "no"
+            mpv.setOptionString("hr-seek-framedrop", "yes")
+            isSeekbarDragging = true
+            Log.d("PlayerDebug", "Frame skipping ENABLED for seekbar")
+        }
+    }
+    
+    // NEW: Disable frame skipping after seekbar seeking
+    fun disableSeekbarFrameSkipping() {
+        if (isSeekbarDragging) {
+            mpv.setOptionString("hr-seek-framedrop", originalHrSeekFramedrop)
+            isSeekbarDragging = false
+            Log.d("PlayerDebug", "Frame skipping DISABLED for seekbar")
+        }
+    }
+    
+    // For HORIZONTAL SWIPE - smooth seeking (frame-by-frame, no rounding)
     fun performSmoothSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         isSeekInProgress = true
@@ -352,7 +320,7 @@ fun PlayerOverlay(
         }
     }
     
-    // For PROGRESS BAR - 1-second increments with B-frames disabled
+    // For PROGRESS BAR - 1-second increments WITH FRAME SKIPPING
     fun performStepSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         isSeekInProgress = true
@@ -436,7 +404,6 @@ fun PlayerOverlay(
     }
     
     fun startHorizontalSeeking(startX: Float) {
-        enableSeekingOptimizations() // Disable B-frames for faster seeking
         isHorizontalSwipe = true
         cancelAutoHide()
         seekStartX = startX
@@ -509,10 +476,7 @@ fun PlayerOverlay(
                 coroutineScope.launch {
                     delay(100)
                     mpv.setPropertyBoolean("pause", false)
-                    disableSeekingOptimizations() // Restore B-frames after unpausing
                 }
-            } else {
-                disableSeekingOptimizations() // Restore B-frames immediately
             }
             
             isSeeking = false
@@ -605,11 +569,11 @@ fun PlayerOverlay(
         }
     }
     
-    // Progress bar handlers with B-frame optimization
-    fun handleProgressBarDrag(newPosition: Float) {
+    // Progress bar handlers - ONLY HERE we enable frame skipping
+    fun handleProgressBarDragStart() {
+        enableSeekbarFrameSkipping() // Enable frame skipping when seekbar drag starts
         cancelAutoHide()
         if (!isSeeking) {
-            enableSeekingOptimizations() // Disable B-frames for faster seeking
             isSeeking = true
             wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
             showSeekTime = true
@@ -621,6 +585,13 @@ fun PlayerOverlay(
             }
         }
         isDragging = true
+    }
+    
+    fun handleProgressBarDrag(newPosition: Float) {
+        if (!isDragging) {
+            handleProgressBarDragStart()
+        }
+        
         val oldPosition = seekbarPosition
         seekbarPosition = newPosition
         seekDirection = if (newPosition > oldPosition) "+" else "-"
@@ -628,7 +599,7 @@ fun PlayerOverlay(
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
         
-        // Use step seek (1-second increments) for progress bar
+        // Use step seek (1-second increments) for progress bar with frame skipping enabled
         performStepSeek(targetPosition)
     }
     
@@ -638,15 +609,15 @@ fun PlayerOverlay(
             coroutineScope.launch {
                 delay(100)
                 mpv.setPropertyBoolean("pause", false)
-                disableSeekingOptimizations() // Restore B-frames after unpausing
             }
-        } else {
-            disableSeekingOptimizations() // Restore B-frames immediately
         }
         isSeeking = false
         showSeekTime = false
         wasPlayingBeforeSeek = false
         seekDirection = ""
+        
+        // Disable frame skipping when seekbar drag finishes
+        disableSeekbarFrameSkipping()
     }
     
     val videoInfoTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
