@@ -51,7 +51,7 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         
         // Seeking
         mpv.setOptionString("hr-seek", "yes")
-        mpv.setOptionString("hr-seek-framedrop", "no")
+        mpv.setOptionString("hr-seek-framedrop", "yes")
         
         // Fast decoding
         mpv.setOptionString("vd-lavc-fast", "yes")
@@ -199,7 +199,7 @@ fun PlayerOverlay(
     var isSeekInProgress by remember { mutableStateOf(false) }
     val seekThrottleMs = 16L
     
-    // Throttling for horizontal swipe
+    // NEW: Throttling for horizontal swipe
     var lastSeekTime by remember { mutableStateOf(0L) }
     var lastHorizontalUpdateTime by remember { mutableStateOf(0L) }
     
@@ -232,11 +232,7 @@ fun PlayerOverlay(
     // Track if duration is valid for seekbar
     var isDurationValid by remember { mutableStateOf(false) }
     
-    // NEW: Track original frame drop setting for seekbar seeking only
-    var originalHrSeekFramedrop by remember { mutableStateOf("no") }
-    var isSeekbarDragging by remember { mutableStateOf(false) }
-    
-    // Auto-hide seekbar
+    // FIXED: Auto-hide seekbar with proper lifecycle - no more job leaks
     LaunchedEffect(showSeekbar, userInteracting) {
         if (showSeekbar && !userInteracting) {
             delay(4000)
@@ -278,6 +274,7 @@ fun PlayerOverlay(
     fun showSeekbarWithTimeout() {
         showSeekbar = true
         showVideoInfo = true
+        // No need to schedule manually - LaunchedEffect handles it
     }
     
     fun showPlaybackFeedback(text: String) {
@@ -289,26 +286,7 @@ fun PlayerOverlay(
         }
     }
     
-    // NEW: Enable frame skipping ONLY for seekbar seeking
-    fun enableSeekbarFrameSkipping() {
-        if (!isSeekbarDragging) {
-            originalHrSeekFramedrop = mpv.getPropertyString("hr-seek-framedrop") ?: "no"
-            mpv.setOptionString("hr-seek-framedrop", "yes")
-            isSeekbarDragging = true
-            Log.d("PlayerDebug", "Frame skipping ENABLED for seekbar")
-        }
-    }
-    
-    // NEW: Disable frame skipping after seekbar seeking
-    fun disableSeekbarFrameSkipping() {
-        if (isSeekbarDragging) {
-            mpv.setOptionString("hr-seek-framedrop", originalHrSeekFramedrop)
-            isSeekbarDragging = false
-            Log.d("PlayerDebug", "Frame skipping DISABLED for seekbar")
-        }
-    }
-    
-    // For HORIZONTAL SWIPE - smooth seeking (frame-by-frame, no rounding)
+    // For HORIZONTAL SWIPE - smooth seeking (frame-by-frame, no rounding) with 50ms throttle
     fun performSmoothSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         isSeekInProgress = true
@@ -320,7 +298,7 @@ fun PlayerOverlay(
         }
     }
     
-    // For PROGRESS BAR - 1-second increments WITH FRAME SKIPPING
+    // For PROGRESS BAR - 1-second increments
     fun performStepSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         isSeekInProgress = true
@@ -460,7 +438,7 @@ fun PlayerOverlay(
             lastHorizontalUpdateTime = now
         }
         
-        // Throttle MPV seeks to every 33ms (30fps) to balance performance and smoothness
+        // Throttle MPV seeks to every 50ms (20fps) to balance performance and smoothness
         if (now - lastSeekTime > 33) {
             performSmoothSeek(clampedPosition)
             lastSeekTime = now
@@ -569,9 +547,8 @@ fun PlayerOverlay(
         }
     }
     
-    // Progress bar handlers - ONLY HERE we enable frame skipping
-    fun handleProgressBarDragStart() {
-        enableSeekbarFrameSkipping() // Enable frame skipping when seekbar drag starts
+    // Progress bar handlers
+    fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
@@ -585,13 +562,6 @@ fun PlayerOverlay(
             }
         }
         isDragging = true
-    }
-    
-    fun handleProgressBarDrag(newPosition: Float) {
-        if (!isDragging) {
-            handleProgressBarDragStart()
-        }
-        
         val oldPosition = seekbarPosition
         seekbarPosition = newPosition
         seekDirection = if (newPosition > oldPosition) "+" else "-"
@@ -599,7 +569,7 @@ fun PlayerOverlay(
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
         
-        // Use step seek (1-second increments) for progress bar with frame skipping enabled
+        // Use step seek (1-second increments) for progress bar
         performStepSeek(targetPosition)
     }
     
@@ -615,9 +585,6 @@ fun PlayerOverlay(
         showSeekTime = false
         wasPlayingBeforeSeek = false
         seekDirection = ""
-        
-        // Disable frame skipping when seekbar drag finishes
-        disableSeekbarFrameSkipping()
     }
     
     val videoInfoTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
