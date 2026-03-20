@@ -40,6 +40,11 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         mpv.setOptionString("vo", "gpu")
         mpv.setOptionString("profile", "fast")
         mpv.setOptionString("keepaspect", "yes")
+        
+        // Define a seeking profile that skips B-frames
+        mpv.command("define-profile", "seek-fast", "vd-lavc-skiploopfilter=nonref")
+        mpv.command("define-profile", "seek-fast", "vd-lavc-skipidct=nonref")
+        mpv.command("define-profile", "seek-fast", "vd-lavc-fast=yes")
     }
 
     override fun postInitOptions() {
@@ -199,7 +204,7 @@ fun PlayerOverlay(
     var isSeekInProgress by remember { mutableStateOf(false) }
     val seekThrottleMs = 16L
     
-    // NEW: Throttling for horizontal swipe
+    // Throttling for horizontal swipe
     var lastSeekTime by remember { mutableStateOf(0L) }
     var lastHorizontalUpdateTime by remember { mutableStateOf(0L) }
     
@@ -232,45 +237,57 @@ fun PlayerOverlay(
     // Track if duration is valid for seekbar
     var isDurationValid by remember { mutableStateOf(false) }
     
-    // B-frame optimization state
+    // B-frame optimization state - FIXED
     var originalSkipLoopFilter by remember { mutableStateOf("all") }
     var originalSkipIDCT by remember { mutableStateOf("all") }
-    var originalHrSeek by remember { mutableStateOf("yes") }
+    var originalVDLavcFast by remember { mutableStateOf("yes") }
     var seekingOptimized by remember { mutableStateOf(false) }
     
-    // Function to disable ONLY B-frames during seeking (keep I and P frames)
+    // Function to disable ONLY B-frames during seeking (FIXED - uses command not setOption)
     fun enableSeekingOptimizations() {
         if (seekingOptimized) return
         
         // Save original values
         originalSkipLoopFilter = mpv.getPropertyString("vd-lavc-skiploopfilter") ?: "all"
         originalSkipIDCT = mpv.getPropertyString("vd-lavc-skipidct") ?: "all"
-        originalHrSeek = mpv.getPropertyString("hr-seek") ?: "yes"
+        originalVDLavcFast = mpv.getPropertyString("vd-lavc-fast") ?: "yes"
         
-        // Disable ONLY B-frames, keep P-frames and I-frames
-        mpv.setOptionString("vd-lavc-skiploopfilter", "nonref") // Skip non-reference frames (B-frames)
-        mpv.setOptionString("vd-lavc-skipidct", "nonref")       // Skip IDCT for non-reference frames
-        mpv.setOptionString("vd-lavc-fast", "yes")              // Keep fast decoding
-        mpv.setOptionString("hr-seek", "yes")                   // Keep precise seeking (uses P-frames)
+        // Apply profile that skips B-frames (defined in SimpleMPVView)
+        mpv.command("apply-profile", "seek-fast")
+        
+        // Force a video output reload to apply changes
+        mpv.command("vf", "toggle")
+        mpv.command("vf", "toggle")
+        
+        // Force a seek to current position to refresh decoding
+        val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
+        mpv.command("seek", currentPos.toString(), "absolute", "exact")
         
         seekingOptimized = true
-        Log.d("PlayerDebug", "Seeking optimizations ENABLED - B-frames disabled, P-frames kept")
+        Log.d("PlayerDebug", "Seeking optimizations ENABLED - B-frames disabled")
     }
     
     fun disableSeekingOptimizations() {
         if (!seekingOptimized) return
         
         // Restore normal playback settings
-        mpv.setOptionString("vd-lavc-skiploopfilter", originalSkipLoopFilter)
-        mpv.setOptionString("vd-lavc-skipidct", originalSkipIDCT)
-        mpv.setOptionString("vd-lavc-fast", "yes")
-        mpv.setOptionString("hr-seek", originalHrSeek)
+        mpv.command("set", "vd-lavc-skiploopfilter", originalSkipLoopFilter)
+        mpv.command("set", "vd-lavc-skipidct", originalSkipIDCT)
+        mpv.command("set", "vd-lavc-fast", originalVDLavcFast)
+        
+        // Force a video output reload to apply changes
+        mpv.command("vf", "toggle")
+        mpv.command("vf", "toggle")
+        
+        // Force a seek to current position to refresh decoding
+        val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
+        mpv.command("seek", currentPos.toString(), "absolute", "exact")
         
         seekingOptimized = false
         Log.d("PlayerDebug", "Seeking optimizations DISABLED - B-frames restored")
     }
     
-    // FIXED: Auto-hide seekbar with proper lifecycle - no more job leaks
+    // Auto-hide seekbar with proper lifecycle
     LaunchedEffect(showSeekbar, userInteracting) {
         if (showSeekbar && !userInteracting) {
             delay(4000)
@@ -312,7 +329,6 @@ fun PlayerOverlay(
     fun showSeekbarWithTimeout() {
         showSeekbar = true
         showVideoInfo = true
-        // No need to schedule manually - LaunchedEffect handles it
     }
     
     fun showPlaybackFeedback(text: String) {
@@ -477,7 +493,7 @@ fun PlayerOverlay(
             lastHorizontalUpdateTime = now
         }
         
-        // Throttle MPV seeks to every 50ms (20fps) to balance performance and smoothness
+        // Throttle MPV seeks to every 33ms (30fps) to balance performance and smoothness
         if (now - lastSeekTime > 33) {
             performSmoothSeek(clampedPosition)
             lastSeekTime = now
