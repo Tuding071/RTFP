@@ -396,6 +396,9 @@ fun PlayerOverlay(
             mpv.setPropertyBoolean("pause", true)
         }
         
+        // Skip B-frames during drag for cheaper/faster seeking
+        mpv.setOptionString("vd-lavc-skipframe", "bidir")
+        
         // Reset throttling timers
         lastSeekTime = 0L
         lastHorizontalUpdateTime = 0L
@@ -448,6 +451,9 @@ fun PlayerOverlay(
     fun endHorizontalSeeking() {
         if (isSeeking) {
             val currentPos = mpv.getPropertyDouble("time-pos") ?: seekStartPosition
+            
+            // Restore full frame decoding before final seek
+            mpv.setOptionString("vd-lavc-skipframe", "none")
             performSmoothSeek(currentPos)
             
             if (wasPlayingBeforeSeek) {
@@ -560,6 +566,9 @@ fun PlayerOverlay(
             if (wasPlayingBeforeSeek) {
                 mpv.setPropertyBoolean("pause", true)
             }
+            
+            // Skip B-frames during progress bar drag
+            mpv.setOptionString("vd-lavc-skipframe", "bidir")
         }
         isDragging = true
         val oldPosition = seekbarPosition
@@ -575,6 +584,10 @@ fun PlayerOverlay(
     
     fun handleDragFinished() {
         isDragging = false
+        
+        // Restore full frame decoding
+        mpv.setOptionString("vd-lavc-skipframe", "none")
+        
         if (wasPlayingBeforeSeek) {
             coroutineScope.launch {
                 delay(100)
