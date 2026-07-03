@@ -78,6 +78,13 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         mpv.setOptionString("network-timeout", "60")
         mpv.setOptionString("cache", "yes")
         mpv.setOptionString("cache-secs", "30")
+
+        // Explicit cache-pause behavior so paused-for-cache reports reliably.
+        // Without this, mpv may stutter through stalls instead of formally
+        // pausing, leaving paused-for-cache stuck at false during real stalls.
+        mpv.setOptionString("cache-pause", "yes")
+        mpv.setOptionString("cache-pause-wait", "2")
+        mpv.setOptionString("cache-pause-initial", "no")
     }
 
     override fun observeProperties() {}
@@ -96,7 +103,6 @@ fun PlayerScreen(
     var savedPosition by remember { mutableStateOf<Double?>(null) }
     val coroutineScope = rememberCoroutineScope()
     
-    // Lifecycle observer for auto-pause with position saving
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -124,14 +130,12 @@ fun PlayerScreen(
     }
     
     Box(modifier = Modifier.fillMaxSize()) {
-        // MPV Player
         AndroidView(
             factory = { ctx ->
                 SimpleMPVView(ctx).apply {
                     mpvView = this
                     mpvInstance = this.mpv
                     
-                    // Initialize with proper paths
                     val filesDir = ctx.filesDir.path
                     val cacheDir = File(ctx.cacheDir, "mpv").apply { mkdirs() }.path
                     initialize(filesDir, cacheDir)
@@ -139,10 +143,6 @@ fun PlayerScreen(
                     videoPath?.let { path ->
                         playFile(path)
                         
-                        // Wait for video to actually start decoding — no timeout,
-                        // since slow connections can take 10-30+ seconds before
-                        // the stream starts. Width/height appear as soon as the
-                        // first frame is decoded, regardless of connection speed.
                         coroutineScope.launch {
                             var width = 0
                             var height = 0
@@ -164,7 +164,6 @@ fun PlayerScreen(
             modifier = Modifier.fillMaxSize()
         )
         
-        // UI Overlay - Only show when video is loaded AND we have a valid MPV instance
         if (isVideoLoaded && mpvInstance != null) {
             PlayerOverlay(
                 mpv = mpvInstance!!,
@@ -202,7 +201,6 @@ fun PlayerOverlay(
     var isSeekInProgress by remember { mutableStateOf(false) }
     val seekThrottleMs = 11L
     
-    // NEW: Throttling for horizontal swipe
     var lastSeekTime by remember { mutableStateOf(0L) }
     var lastHorizontalUpdateTime by remember { mutableStateOf(0L) }
     
@@ -232,14 +230,12 @@ fun PlayerOverlay(
     var showQuickSeekFeedback by remember { mutableStateOf(false) }
     var quickSeekFeedbackText by remember { mutableStateOf("") }
     
-    // Track if duration is valid for seekbar
     var isDurationValid by remember { mutableStateOf(false) }
     
-    // Buffering indicator state
+    // Buffering indicator state — driven by mpv's own paused-for-cache property
     var isBuffering by remember { mutableStateOf(false) }
     val bufferingAlpha = remember { Animatable(0f) }
     
-    // FIXED: Auto-hide seekbar with proper lifecycle - no more job leaks
     LaunchedEffect(showSeekbar, userInteracting) {
         if (showSeekbar && !userInteracting) {
             delay(4000)
@@ -250,7 +246,6 @@ fun PlayerOverlay(
         }
     }
     
-    // Wait for valid duration before starting (no attempt cap - streams can be slow)
     LaunchedEffect(Unit) {
         var duration = mpv.getPropertyDouble("duration") ?: 0.0
         while (duration <= 1.0) {
@@ -263,7 +258,7 @@ fun PlayerOverlay(
         isDurationValid = true
     }
     
-    // Poll mpv for buffering state
+    // Poll mpv for real buffering state (now reliable with cache-pause set)
     LaunchedEffect(Unit) {
         while (isActive) {
             isBuffering = mpv.getPropertyBoolean("paused-for-cache") ?: false
@@ -284,7 +279,6 @@ fun PlayerOverlay(
         }
     }
     
-    // Utility functions
     fun cancelAutoHide() {
         userInteracting = true
         coroutineScope.launch {
@@ -296,7 +290,6 @@ fun PlayerOverlay(
     fun showSeekbarWithTimeout() {
         showSeekbar = true
         showVideoInfo = true
-        // No need to schedule manually - LaunchedEffect handles it
     }
     
     fun showPlaybackFeedback(text: String) {
@@ -308,11 +301,9 @@ fun PlayerOverlay(
         }
     }
     
-    // For HORIZONTAL SWIPE - smooth seeking (frame-by-frame, no rounding) with 50ms throttle
     fun performSmoothSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         isSeekInProgress = true
-        // NO ROUNDING - smooth for horizontal swipe
         mpv.command("seek", targetPosition.toString(), "absolute", "exact")
         coroutineScope.launch {
             delay(seekThrottleMs)
@@ -320,11 +311,9 @@ fun PlayerOverlay(
         }
     }
     
-    // For PROGRESS BAR - 1-second increments
     fun performStepSeek(targetPosition: Double) {
         if (isSeekInProgress) return
         isSeekInProgress = true
-        // Round to nearest second for progress bar
         val roundedPosition = (targetPosition + 0.5).toInt().toDouble()
         mpv.command("seek", roundedPosition.toString(), "absolute", "exact")
         coroutineScope.launch {
@@ -418,7 +407,6 @@ fun PlayerOverlay(
             mpv.setPropertyBoolean("pause", true)
         }
         
-        // Reset throttling timers
         lastSeekTime = 0L
         lastHorizontalUpdateTime = 0L
     }
@@ -452,15 +440,12 @@ fun PlayerOverlay(
         
         val now = System.currentTimeMillis()
         
-        // Update UI every 16ms (60fps) for smooth visual feedback
         if (now - lastHorizontalUpdateTime > 16) {
             currentTime = formatTimeSimple(clampedPosition)
-            // UPDATE SEEKBAR POSITION IN REAL-TIME
             seekbarPosition = clampedPosition.toFloat()
             lastHorizontalUpdateTime = now
         }
         
-        // Throttle MPV seeks to every 50ms (20fps) to balance performance and smoothness
         if (now - lastSeekTime > 11) {
             performSmoothSeek(clampedPosition)
             lastSeekTime = now
@@ -514,7 +499,6 @@ fun PlayerOverlay(
         isLongTap = false
     }
     
-    // Get filename
     LaunchedEffect(Unit) {
         val intent = (context as? android.app.Activity)?.intent
         fileName = when {
@@ -533,7 +517,6 @@ fun PlayerOverlay(
         showSeekbar = true
     }
     
-    // Speed control backup
     LaunchedEffect(isSpeedingUp) {
         if (isSpeedingUp) {
             mpv.setPropertyDouble("speed", 2.0)
@@ -542,22 +525,18 @@ fun PlayerOverlay(
         }
     }
     
-    // Update time
     LaunchedEffect(Unit) {
-        // Wait for duration to be valid
         var duration = mpv.getPropertyDouble("duration") ?: 0.0
         while (duration <= 1.0) {
             delay(100)
             duration = mpv.getPropertyDouble("duration") ?: 0.0
         }
         
-        // Now start updating
         while (isActive) {
             val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
             val currentDuration = mpv.getPropertyDouble("duration") ?: duration
             
             if (!isSeeking && !isDragging) {
-                // Update both together
                 currentTime = formatTimeSimple(currentPos)
                 seekbarPosition = currentPos.toFloat()
             }
@@ -569,7 +548,6 @@ fun PlayerOverlay(
         }
     }
     
-    // Progress bar handlers
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
@@ -591,7 +569,6 @@ fun PlayerOverlay(
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
         
-        // Use step seek (1-second increments) for progress bar
         performStepSeek(targetPosition)
     }
     
@@ -615,7 +592,6 @@ fun PlayerOverlay(
     val timeDisplayBackgroundAlpha = if (isSeeking || isDragging) 0.0f else 0.8f
     
     Box(modifier = modifier.fillMaxSize()) {
-        // Gesture area
         Box(modifier = Modifier.fillMaxSize()) {
             Box(
                 modifier = Modifier
@@ -679,7 +655,6 @@ fun PlayerOverlay(
             }
         }
         
-        // Seekbar
         if (showSeekbar) {
             Box(
                 modifier = Modifier
@@ -722,7 +697,6 @@ fun PlayerOverlay(
                                 modifier = Modifier.fillMaxSize().height(48.dp)
                             )
                         } else {
-                            // Show static progress bar while loading
                             Box(modifier = Modifier.fillMaxSize()) {
                                 Box(
                                     modifier = Modifier
@@ -745,7 +719,6 @@ fun PlayerOverlay(
             }
         }
         
-        // Video title
         if (showVideoInfo) {
             Text(
                 text = fileName,
@@ -762,7 +735,7 @@ fun PlayerOverlay(
             )
         }
         
-        // Buffering indicator - dead center of screen, independent of other feedback
+        // Buffering indicator - dead center, driven by real mpv paused-for-cache state
         if (isBuffering) {
             Text(
                 text = "Buffering",
@@ -778,7 +751,6 @@ fun PlayerOverlay(
             )
         }
         
-        // Feedback (pause/resume/2X/seek) - unchanged, top center
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 isSpeedingUp -> Text(
@@ -824,7 +796,6 @@ fun SimpleDraggableProgressBar(
     val progressFraction = (safePosition / safeDuration).coerceIn(0f, 1f)
     
     Box(modifier = modifier.height(48.dp)) {
-        // Background bar
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -833,7 +804,6 @@ fun SimpleDraggableProgressBar(
                 .background(Color.Gray.copy(alpha = 0.6f))
         )
         
-        // Progress bar
         Box(
             modifier = Modifier
                 .fillMaxWidth(fraction = progressFraction)
@@ -842,7 +812,6 @@ fun SimpleDraggableProgressBar(
                 .background(Color.White)
         )
         
-        // Drag handle area
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -851,7 +820,6 @@ fun SimpleDraggableProgressBar(
                 .pointerInput(Unit) {
                     detectDragGestures(
                         onDragStart = { offset ->
-                            // Save starting position and X coordinate
                             dragStartX = offset.x
                             savedPositionAtTouch = getFreshPosition().coerceIn(0f, safeDuration)
                         },
@@ -860,15 +828,12 @@ fun SimpleDraggableProgressBar(
                             val currentX = change.position.x
                             val totalMovementX = currentX - dragStartX
                             
-                            // Calculate new position directly from drag movement
                             val deltaPosition = (totalMovementX / size.width) * safeDuration
                             val newPosition = (savedPositionAtTouch + deltaPosition)
                                 .coerceIn(0f, safeDuration)
                             
-                            // Round to nearest second for 1-second increments (PROGRESS BAR ONLY)
                             val roundedPosition = (newPosition + 0.5f).toInt().toFloat()
                             
-                            // Update if changed
                             if (abs(roundedPosition - safePosition) > 0.1f) {
                                 onValueChange(roundedPosition)
                             }
