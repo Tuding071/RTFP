@@ -274,11 +274,8 @@ jobs:
       run: chmod +x ./gradlew
 
     - name: 🏗️ Build APK
-      id: build
       run: |
-        set +e
         ./gradlew assembleDebug --stacktrace 2>&1 | tee build.log
-        echo "exit_code=$?" >> $GITHUB_OUTPUT
 
     - name: 📝 Save error log
       if: failure()
@@ -298,7 +295,6 @@ jobs:
           build.log
 
     - name: ✍️ Sign APK
-      if: success()
       run: |
         sudo apt-get update && sudo apt-get install -y apksigner
         keytool -genkeypair -v -keystore dummy.keystore -storepass test1234 \
@@ -313,7 +309,6 @@ jobs:
         apksigner verify "RTFP-${{ github.run_number }}.apk"
 
     - name: 📦 Create release ZIP
-      if: success()
       run: |
         mkdir -p release
         cp "RTFP-${{ github.run_number }}.apk" release/
@@ -326,7 +321,6 @@ jobs:
         echo "✅ Created RTFP-${{ github.run_number }}-complete.zip with APK + sources"
 
     - name: 📤 Upload complete package
-      if: success()
       uses: actions/upload-artifact@v4
       with:
         name: RTFP-${{ github.run_number }}-complete
