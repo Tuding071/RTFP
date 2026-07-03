@@ -77,7 +77,6 @@ jobs:
         }
         EOF
 
-    # ---- KEY CHANGE 1: versionCode/versionName come from build number ----
     - name: 📁 Generate app/build.gradle (arm64-v8a only)
       run: |
         cat > app/build.gradle << EOF
@@ -148,7 +147,6 @@ jobs:
         }
         EOF
 
-    # ---- KEY CHANGE 2: manifest now accepts http/https + text/plain shares ----
     - name: 📁 Generate AndroidManifest.xml
       run: |
         cat > app/src/main/AndroidManifest.xml << 'EOF'
@@ -208,7 +206,7 @@ jobs:
                         <data android:mimeType="audio/*" />
                     </intent-filter>
 
-                    <!-- Shared plain-text m3u8/stream links (most browsers/apps share links this way) -->
+                    <!-- Shared plain-text m3u8/stream links -->
                     <intent-filter>
                         <action android:name="android.intent.action.SEND" />
                         <category android:name="android.intent.category.DEFAULT" />
@@ -236,7 +234,6 @@ jobs:
         android.enableJetifier=true
         EOF
 
-    # ---- KEY CHANGE 3: proper icon — solid peach bg + dark brown play triangle ----
     - name: 🎨 Create launcher icons
       run: |
         sudo apt-get update && sudo apt-get install -y imagemagick
@@ -247,11 +244,18 @@ jobs:
         gen_icon() {
           SIZE=$1
           OUT=$2
-          TRI_SIZE=$(( SIZE * 40 / 100 ))
-          convert -size ${SIZE}x${SIZE} xc:"$BG" \
-            \( -size ${TRI_SIZE}x${TRI_SIZE} xc:none -fill "$FG" \
-               -draw "polygon 0,0 0,%[fx:h] %[fx:w],%[fx:h/2]" \) \
-            -gravity center -geometry +$(( SIZE / 40 ))+0 -composite \
+
+          W=$SIZE
+          H=$SIZE
+          TX=$(( W * 32 / 100 ))
+          TY_TOP=$(( H * 28 / 100 ))
+          TY_MID=$(( H * 50 / 100 ))
+          TY_BOT=$(( H * 72 / 100 ))
+          TX_TIP=$(( W * 72 / 100 ))
+
+          convert -size ${W}x${H} xc:"$BG" \
+            -fill "$FG" \
+            -draw "polygon $TX,$TY_TOP $TX,$TY_BOT $TX_TIP,$TY_MID" \
             "$OUT"
         }
 
@@ -293,7 +297,6 @@ jobs:
           error.md
           build.log
 
-    # ---- KEY CHANGE 1 cont'd: signed APK filename uses build number ----
     - name: ✍️ Sign APK
       if: success()
       run: |
