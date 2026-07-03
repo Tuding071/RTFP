@@ -277,6 +277,18 @@ jobs:
       run: |
         ./gradlew assembleDebug --stacktrace 2>&1 | tee build.log
 
+    - name: ✅ Verify APK exists
+      run: |
+        APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+        if [ -f "$APK_PATH" ]; then
+          echo "APK found at $APK_PATH"
+        else
+          echo "❌ APK not found at $APK_PATH"
+          echo "Contents of app/build/outputs:"
+          find app/build/outputs -type f 2>/dev/null || echo "(no files)"
+          exit 1
+        fi
+
     - name: 📝 Save error log
       if: failure()
       run: |
@@ -296,12 +308,12 @@ jobs:
 
     - name: ✍️ Sign APK
       run: |
+        APK="app/build/outputs/apk/debug/app-debug.apk"
         sudo apt-get update && sudo apt-get install -y apksigner
         keytool -genkeypair -v -keystore dummy.keystore -storepass test1234 \
           -alias key -keypass test1234 -keyalg RSA -keysize 2048 -validity 10000 \
           -dname "CN=RTFP"
 
-        APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
         apksigner sign --ks dummy.keystore --ks-key-alias key \
           --ks-pass pass:test1234 --key-pass pass:test1234 \
           --out "RTFP-${{ github.run_number }}.apk" "$APK"
