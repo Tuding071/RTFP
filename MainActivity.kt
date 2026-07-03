@@ -87,9 +87,25 @@ class MainActivity : ComponentActivity() {
     private fun extractVideoPath(intent: Intent?): String? {
         return when (intent?.action) {
             Intent.ACTION_VIEW -> intent.data?.toString()
-            Intent.ACTION_SEND -> intent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM)?.toString()
+            Intent.ACTION_SEND -> {
+                // File share (has a content:// or file:// URI attached)
+                val streamUri = intent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM)
+                if (streamUri != null) {
+                    streamUri.toString()
+                } else {
+                    // Link share (m3u8, http/https URL shared as plain text)
+                    val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+                    text?.let { extractUrlFromText(it) }
+                }
+            }
             else -> null
         }
+    }
+    
+    private fun extractUrlFromText(text: String): String? {
+        // Many apps prepend a title/caption before the URL, so pull out the URL itself
+        val urlRegex = Regex("""https?://\S+""")
+        return urlRegex.find(text)?.value ?: text.trim().takeIf { it.isNotBlank() }
     }
     
     private fun setupFullscreen() {
