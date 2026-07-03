@@ -6,6 +6,8 @@ import android.net.Uri
 import android.util.AttributeSet
 import android.util.Log
 import android.view.MotionEvent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
@@ -233,6 +235,10 @@ fun PlayerOverlay(
     // Track if duration is valid for seekbar
     var isDurationValid by remember { mutableStateOf(false) }
     
+    // Buffering indicator state
+    var isBuffering by remember { mutableStateOf(false) }
+    val bufferingAlpha = remember { Animatable(0f) }
+    
     // FIXED: Auto-hide seekbar with proper lifecycle - no more job leaks
     LaunchedEffect(showSeekbar, userInteracting) {
         if (showSeekbar && !userInteracting) {
@@ -255,6 +261,27 @@ fun PlayerOverlay(
         seekbarDuration = duration.toFloat()
         totalTime = formatTimeSimple(duration)
         isDurationValid = true
+    }
+    
+    // Poll mpv for buffering state
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            isBuffering = mpv.getPropertyBoolean("paused-for-cache") ?: false
+            delay(200)
+        }
+    }
+    
+    // Blink loop: fade in, hold briefly, fade out, repeat every ~1s while buffering
+    LaunchedEffect(isBuffering) {
+        if (isBuffering) {
+            while (isBuffering) {
+                bufferingAlpha.animateTo(1f, animationSpec = tween(300))
+                delay(400)
+                bufferingAlpha.animateTo(0f, animationSpec = tween(300))
+            }
+        } else {
+            bufferingAlpha.snapTo(0f)
+        }
     }
     
     // Utility functions
@@ -735,7 +762,23 @@ fun PlayerOverlay(
             )
         }
         
-        // Feedback
+        // Buffering indicator - dead center of screen, independent of other feedback
+        if (isBuffering) {
+            Text(
+                text = "Buffering",
+                style = TextStyle(
+                    color = Color.White.copy(alpha = bufferingAlpha.value),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color.DarkGray.copy(alpha = 0.8f * bufferingAlpha.value))
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            )
+        }
+        
+        // Feedback (pause/resume/2X/seek) - unchanged, top center
         Box(modifier = Modifier.align(Alignment.TopCenter).offset(y = 80.dp)) {
             when {
                 isSpeedingUp -> Text(
