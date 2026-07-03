@@ -71,6 +71,11 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         // Video
         mpv.setOptionString("deband", "no")
         mpv.setOptionString("video-aspect-override", "no")
+
+        // Network streaming (HLS/M3U8) - tolerate slow connections
+        mpv.setOptionString("network-timeout", "60")
+        mpv.setOptionString("cache", "yes")
+        mpv.setOptionString("cache-secs", "30")
     }
 
     override fun observeProperties() {}
@@ -132,28 +137,24 @@ fun PlayerScreen(
                     videoPath?.let { path ->
                         playFile(path)
                         
-                        // Wait for video to load and get dimensions
+                        // Wait for video to actually start decoding — no timeout,
+                        // since slow connections can take 10-30+ seconds before
+                        // the stream starts. Width/height appear as soon as the
+                        // first frame is decoded, regardless of connection speed.
                         coroutineScope.launch {
-                            var attempts = 0
-                            var duration = 0.0
+                            var width = 0
+                            var height = 0
                             
-                            // Keep checking until we get valid duration
-                            while (duration <= 0 && attempts < 50) { // 5 seconds max
+                            while (width <= 0 || height <= 0) {
                                 delay(100)
-                                duration = mpv.getPropertyDouble("duration") ?: 0.0
-                                attempts++
-                                Log.d("PlayerDebug", "Checking duration: $duration (attempt $attempts)")
+                                width = mpv.getPropertyInt("width") ?: 0
+                                height = mpv.getPropertyInt("height") ?: 0
                             }
                             
-                            val width = mpv.getPropertyInt("width") ?: 0
-                            val height = mpv.getPropertyInt("height") ?: 0
+                            Log.d("PlayerDebug", "Video loaded - Width: $width, Height: $height")
                             
-                            Log.d("PlayerDebug", "Video loaded - Width: $width, Height: $height, Duration: $duration")
-                            
-                            if (width > 0 && height > 0 && duration > 0) {
-                                onVideoLoaded(width, height)
-                                isVideoLoaded = true
-                            }
+                            onVideoLoaded(width, height)
+                            isVideoLoaded = true
                         }
                     }
                 }
@@ -243,23 +244,17 @@ fun PlayerOverlay(
         }
     }
     
-    // Wait for valid duration before starting
+    // Wait for valid duration before starting (no attempt cap - streams can be slow)
     LaunchedEffect(Unit) {
-        // Wait for duration to be available
-        var duration = 0.0
-        var attempts = 0
-        while (duration <= 1.0 && attempts < 30) { // Wait until duration > 1 second
-            duration = mpv.getPropertyDouble("duration") ?: 0.0
-            if (duration > 1.0) {
-                Log.d("PlayerDebug", "Duration finally available: $duration")
-                seekbarDuration = duration.toFloat()
-                totalTime = formatTimeSimple(duration)
-                isDurationValid = true
-                break
-            }
+        var duration = mpv.getPropertyDouble("duration") ?: 0.0
+        while (duration <= 1.0) {
             delay(100)
-            attempts++
+            duration = mpv.getPropertyDouble("duration") ?: 0.0
         }
+        Log.d("PlayerDebug", "Duration finally available: $duration")
+        seekbarDuration = duration.toFloat()
+        totalTime = formatTimeSimple(duration)
+        isDurationValid = true
     }
     
     // Utility functions
