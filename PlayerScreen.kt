@@ -96,6 +96,21 @@ fun PlayerScreen(
     var savedPosition by remember { mutableStateOf<Double?>(null) }
     val coroutineScope = rememberCoroutineScope()
     
+    // Loading indicator alpha, same blink style as buffering
+    val loadingAlpha = remember { Animatable(0f) }
+    
+    LaunchedEffect(isVideoLoaded) {
+        if (!isVideoLoaded) {
+            while (!isVideoLoaded) {
+                loadingAlpha.animateTo(1f, animationSpec = tween(300))
+                delay(400)
+                loadingAlpha.animateTo(0f, animationSpec = tween(300))
+            }
+        } else {
+            loadingAlpha.snapTo(0f)
+        }
+    }
+    
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -157,6 +172,23 @@ fun PlayerScreen(
             modifier = Modifier.fillMaxSize()
         )
         
+        // Loading indicator - shown before the player overlay even exists
+        if (!isVideoLoaded) {
+            Text(
+                text = "Loading",
+                style = TextStyle(
+                    color = Color.White.copy(alpha = loadingAlpha.value),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color.DarkGray.copy(alpha = 0.8f * loadingAlpha.value))
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            )
+        }
+        
+        // UI Overlay - Only show when video is loaded AND we have a valid MPV instance
         if (isVideoLoaded && mpvInstance != null) {
             PlayerOverlay(
                 mpv = mpvInstance!!,
