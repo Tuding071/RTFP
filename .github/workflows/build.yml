@@ -77,7 +77,7 @@ jobs:
         }
         EOF
 
-    - name: 📁 Generate app/build.gradle (arm64-v8a only)
+    - name: 📁 Generate app/build.gradle (with signing)
       run: |
         cat > app/build.gradle << EOF
         plugins {
@@ -101,7 +101,21 @@ jobs:
                 }
             }
 
+            // Signing configuration using the generated keystore
+            signingConfigs {
+                release {
+                    storeFile file('release.keystore')
+                    storePassword 'test1234'
+                    keyAlias 'rtfp'
+                    keyPassword 'test1234'
+                }
+            }
+
             buildTypes {
+                release {
+                    signingConfig signingConfigs.release
+                    minifyEnabled false   // set to true if you add ProGuard rules
+                }
                 debug {
                     debuggable true
                 }
@@ -267,6 +281,17 @@ jobs:
 
         echo "✅ Launcher icons created (peach bg, dark brown play triangle, all densities identical style)"
 
+    - name: 🔑 Generate keystore (if missing)
+      run: |
+        if [ ! -f app/release.keystore ]; then
+          keytool -genkeypair -v -keystore app/release.keystore -storepass test1234 \
+            -alias rtfp -keypass test1234 -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=RTFP"
+          echo "✅ Keystore created"
+        else
+          echo "✅ Keystore already exists (cached)"
+        fi
+
     - name: 🐘 Init Gradle wrapper
       run: gradle wrapper --gradle-version 8.2
 
@@ -276,64 +301,24 @@ jobs:
     - name: 🧹 Clean previous build
       run: ./gradlew clean
 
-    - name: 🏗️ Build APK
-      run: |
-        ./gradlew assembleDebug --stacktrace 2>&1 | tee build.log
+    - name: 🏗️ Build signed release APK
+      run: ./gradlew assembleRelease --stacktrace
 
-    - name: ✅ Verify APK exists (with diagnostics)
+    - name: ✅ Verify release APK
       run: |
-        APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
-        if [ -f "$APK_PATH" ]; then
-          echo "✅ APK found at $APK_PATH"
+        APK="app/build/outputs/apk/release/app-release.apk"
+        if [ -f "$APK" ]; then
+          echo "✅ Signed APK found: $APK"
+          echo "📦 Size: $(ls -lh "$APK" | awk '{print $5}')"
         else
-          echo "❌ APK not found at $APK_PATH"
-          echo "----------------------------------------------------------------"
-          echo "Full build output (last 200 lines):"
-          tail -n 200 build.log
-          echo "----------------------------------------------------------------"
-          echo "Searching for any APK files in app/build/outputs:"
-          find app/build/outputs -type f -name "*.apk" 2>/dev/null || echo "(no APK files)"
-          echo "----------------------------------------------------------------"
-          echo "Listing entire app/build/outputs structure:"
-          find app/build/outputs -type f 2>/dev/null || echo "(empty)"
+          echo "❌ APK missing at $APK"
           exit 1
         fi
-
-    - name: 📝 Save error log
-      if: failure()
-      run: |
-        echo "## Build Failed" > error.md
-        echo '```' >> error.md
-        grep -E "error|Error|FAILED" build.log | tail -50 >> error.md
-        echo '```' >> error.md
-
-    - name: 📤 Upload error logs
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: error-log
-        path: |
-          error.md
-          build.log
-
-    - name: ✍️ Sign APK
-      run: |
-        APK="app/build/outputs/apk/debug/app-debug.apk"
-        sudo apt-get update && sudo apt-get install -y apksigner
-        keytool -genkeypair -v -keystore dummy.keystore -storepass test1234 \
-          -alias key -keypass test1234 -keyalg RSA -keysize 2048 -validity 10000 \
-          -dname "CN=RTFP"
-
-        apksigner sign --ks dummy.keystore --ks-key-alias key \
-          --ks-pass pass:test1234 --key-pass pass:test1234 \
-          --out "RTFP-${{ github.run_number }}.apk" "$APK"
-
-        apksigner verify "RTFP-${{ github.run_number }}.apk"
 
     - name: 📦 Create release ZIP
       run: |
         mkdir -p release
-        cp "RTFP-${{ github.run_number }}.apk" release/
+        cp app/build/outputs/apk/release/app-release.apk release/RTFP-${{ github.run_number }}.apk
         cp MainActivity.kt PlayerScreen.kt release/
         mkdir -p release/.github/workflows
         cp .github/workflows/build.yml release/.github/workflows/
