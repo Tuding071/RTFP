@@ -6,6 +6,7 @@ import android.net.Uri
 import android.util.AttributeSet
 import android.util.Log
 import android.view.MotionEvent
+import android.view.WindowManager
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -108,6 +109,56 @@ fun PlayerScreen(
             }
         } else {
             loadingAlpha.snapTo(0f)
+        }
+    }
+    
+    // Screen timeout management: keep screen on while actively playing, but
+    // allow it to sleep after 15 minutes of being paused or finished with no interaction.
+    DisposableEffect(isVideoLoaded, mpvInstance) {
+        var screenOnJob: Job? = null
+        val activity = context as? android.app.Activity
+        val idleTimeoutMs = 15 * 60 * 1000L // 15 minutes
+        
+        if (isVideoLoaded && mpvInstance != null && activity != null) {
+            val mpv = mpvInstance!!
+            
+            screenOnJob = coroutineScope.launch {
+                var wasIdle = false
+                
+                while (isActive) {
+                    delay(1000)
+                    
+                    val paused = mpv.getPropertyBoolean("pause") ?: false
+                    val position = mpv.getPropertyDouble("time-pos") ?: 0.0
+                    val duration = mpv.getPropertyDouble("duration") ?: 0.0
+                    val isFinished = duration > 0 && position >= duration - 0.5
+                    val shouldAllowIdle = paused || isFinished
+                    
+                    if (shouldAllowIdle && !wasIdle) {
+                        // Just entered paused/finished state — start 15-min countdown
+                        wasIdle = true
+                        delay(idleTimeoutMs)
+                        
+                        // Re-check state hasn't changed during the wait
+                        val stillPaused = mpv.getPropertyBoolean("pause") ?: false
+                        val stillPosition = mpv.getPropertyDouble("time-pos") ?: 0.0
+                        val stillDuration = mpv.getPropertyDouble("duration") ?: 0.0
+                        val stillFinished = stillDuration > 0 && stillPosition >= stillDuration - 0.5
+                        
+                        if (stillPaused || stillFinished) {
+                            activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        }
+                    } else if (!shouldAllowIdle) {
+                        // Playing again — ensure screen-on flag is restored, reset idle tracking
+                        wasIdle = false
+                        activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
+                }
+            }
+        }
+        
+        onDispose {
+            screenOnJob?.cancel()
         }
     }
     
