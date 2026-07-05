@@ -4,7 +4,6 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.view.View
-import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
@@ -36,8 +35,8 @@ class MainActivity : ComponentActivity() {
         // Set up fullscreen immersive mode
         setupFullscreen()
         
-        // Keep screen on while activity is visible
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Screen timeout is now managed dynamically inside PlayerScreen
+        // based on playback state (playing / paused / finished), not fixed on here.
         
         // Handle back button - always finish (destroy) the activity
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
