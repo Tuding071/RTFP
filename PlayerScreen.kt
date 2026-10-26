@@ -24,6 +24,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -32,9 +33,93 @@ import androidx.lifecycle.LifecycleEventObserver
 import `is`.xyz.mpv.BaseMPVView
 import `is`.xyz.mpv.MPV
 import kotlinx.coroutines.*
+import org.json.JSONObject
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.sign
+
+// ===== NEW: prompt modes =====
+private const val PROMPT_NONE = 0
+private const val PROMPT_RESUME = 1
+private const val PROMPT_REPLAY = 2
+
+// ===== NEW: resume position storage (one entry per file/link, max 200, oldest dropped) =====
+private object ResumeStore {
+    private const val PREFS = "rtfp_resume"
+    private const val ENTRIES = "entries"
+    private const val MAX_ENTRIES = 200
+    private const val MIN_SAVE_SECONDS = 10.0
+
+    private fun load(context: Context): JSONObject {
+        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(ENTRIES, null)
+        return try {
+            if (raw != null) JSONObject(raw) else JSONObject()
+        } catch (e: Exception) {
+            JSONObject()
+        }
+    }
+
+    private fun write(context: Context, obj: JSONObject) {
+        // commit() = written immediately, safe even if the app is swiped away right after
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putString(ENTRIES, obj.toString()).commit()
+    }
+
+    fun get(context: Context, key: String): Double? {
+        val entry = load(context).optJSONObject(key) ?: return null
+        val pos = entry.optDouble("p", -1.0)
+        return if (pos >= MIN_SAVE_SECONDS) pos else null
+    }
+
+    fun save(context: Context, key: String, position: Double) {
+        if (position < MIN_SAVE_SECONDS) {
+            remove(context, key)
+            return
+        }
+        val obj = load(context)
+        obj.put(key, JSONObject().put("p", position).put("t", System.currentTimeMillis()))
+        while (obj.length() > MAX_ENTRIES) {
+            var oldestKey: String? = null
+            var oldestTime = Long.MAX_VALUE
+            val keys = obj.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                val t = obj.optJSONObject(k)?.optLong("t", 0L) ?: 0L
+                if (t < oldestTime) {
+                    oldestTime = t
+                    oldestKey = k
+                }
+            }
+            if (oldestKey == null) break
+            obj.remove(oldestKey)
+        }
+        write(context, obj)
+    }
+
+    fun remove(context: Context, key: String) {
+        val obj = load(context)
+        if (obj.has(key)) {
+            obj.remove(key)
+            write(context, obj)
+        }
+    }
+
+    // Links: URL (query stripped when the path looks like a file, e.g. .m3u8/.mp4)
+    // Files: display name + duration (content:// URIs can change between opens)
+    fun makeKey(context: Context, videoPath: String?, mpv: MPV, duration: Double): String? {
+        if (videoPath == null) return null
+        val isLink = videoPath.startsWith("http://", true) || videoPath.startsWith("https://", true)
+        return if (isLink) {
+            val noFragment = videoPath.substringBefore("#")
+            val base = noFragment.substringBefore("?")
+            val lastSegment = base.substringAfterLast("/")
+            "u|" + if (lastSegment.contains('.')) base else noFragment
+        } else {
+            if (duration <= 1.0) null
+            else "f|" + resolveDisplayName(context, mpv) + "|" + duration.toInt()
+        }
+    }
+}
 
 class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView(context, attrs) {
     
@@ -43,6 +128,8 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         mpv.setOptionString("vo", "gpu")
         mpv.setOptionString("profile", "fast")
         mpv.setOptionString("keepaspect", "yes")
+        // NEW: stay on the last frame at the end (needed for the Replay screen)
+        mpv.setOptionString("keep-open", "yes")
     }
 
     override fun postInitOptions() {
@@ -96,6 +183,53 @@ fun PlayerScreen(
     var isVideoLoaded by remember { mutableStateOf(false) }
     var savedPosition by remember { mutableStateOf<Double?>(null) }
     val coroutineScope = rememberCoroutineScope()
+
+    // ===== NEW: resume / replay state =====
+    var promptMode by remember { mutableStateOf(PROMPT_NONE) }
+    var resumePosition by remember { mutableStateOf(0.0) }
+    var resumeKey by remember { mutableStateOf<String?>(null) }
+    var trackingEnabled by remember { mutableStateOf(false) }
+    var ignoreEndUntil by remember { mutableStateOf(0L) }
+
+    // Saves current position (or clears the entry when within 5s of the end)
+    fun saveProgress() {
+        val key = resumeKey ?: return
+        if (!trackingEnabled || promptMode != PROMPT_NONE) return
+        val m = mpvInstance ?: return
+        val pos = m.getPropertyDouble("time-pos") ?: return
+        val dur = m.getPropertyDouble("duration") ?: 0.0
+        if (dur > 1.0 && pos >= dur - 5.0) {
+            ResumeStore.remove(context, key)
+        } else {
+            ResumeStore.save(context, key, pos)
+        }
+    }
+
+    fun resumeChoice() {
+        val m = mpvInstance ?: return
+        m.command("seek", resumePosition.toString(), "absolute", "exact")
+        m.setPropertyBoolean("pause", false)
+        promptMode = PROMPT_NONE
+        trackingEnabled = true
+    }
+
+    fun startOver() {
+        val m = mpvInstance ?: return
+        resumeKey?.let { ResumeStore.remove(context, it) }
+        ignoreEndUntil = System.currentTimeMillis() + 1500
+        m.command("seek", "0", "absolute", "exact")
+        m.setPropertyBoolean("pause", false)
+        promptMode = PROMPT_NONE
+        trackingEnabled = true
+    }
+
+    fun handleEnded() {
+        if (System.currentTimeMillis() < ignoreEndUntil) return
+        if (promptMode != PROMPT_NONE) return
+        resumeKey?.let { ResumeStore.remove(context, it) }
+        trackingEnabled = false
+        promptMode = PROMPT_REPLAY
+    }
     
     // Loading indicator alpha, same blink style as buffering
     val loadingAlpha = remember { Animatable(0f) }
@@ -109,6 +243,46 @@ fun PlayerScreen(
             }
         } else {
             loadingAlpha.snapTo(0f)
+        }
+    }
+
+    // ===== NEW: once loaded, look up saved position and decide: prompt or play =====
+    LaunchedEffect(isVideoLoaded) {
+        if (!isVideoLoaded) return@LaunchedEffect
+        val m = mpvInstance ?: return@LaunchedEffect
+        val isLink = videoPath?.startsWith("http", ignoreCase = true) == true
+
+        var duration = m.getPropertyDouble("duration") ?: 0.0
+        if (!isLink) {
+            var tries = 0
+            while (duration <= 1.0 && tries < 30) {
+                delay(100)
+                duration = m.getPropertyDouble("duration") ?: 0.0
+                tries++
+            }
+        }
+
+        val key = ResumeStore.makeKey(context, videoPath, m, duration)
+        resumeKey = key
+        val saved = if (key != null) ResumeStore.get(context, key) else null
+
+        if (saved != null && (duration <= 1.0 || saved < duration - 5.0)) {
+            resumePosition = saved
+            m.setPropertyBoolean("pause", true)
+            promptMode = PROMPT_RESUME
+        } else {
+            m.setPropertyBoolean("pause", false)
+            trackingEnabled = true
+        }
+    }
+
+    // ===== NEW: backup save every 5s while playing =====
+    LaunchedEffect(trackingEnabled, mpvInstance) {
+        val m = mpvInstance ?: return@LaunchedEffect
+        while (trackingEnabled && isActive) {
+            delay(5000)
+            val paused = m.getPropertyBoolean("pause") ?: false
+            if (!paused) saveProgress()
         }
     }
     
@@ -168,6 +342,8 @@ fun PlayerScreen(
                 Lifecycle.Event.ON_PAUSE -> {
                     mpvView?.let { view ->
                         savedPosition = view.mpv.getPropertyDouble("time-pos")
+                        // NEW: main save point (back / home / recents all pass through here)
+                        saveProgress()
                         view.mpv.setPropertyBoolean("pause", true)
                     }
                 }
@@ -200,6 +376,8 @@ fun PlayerScreen(
                     initialize(filesDir, cacheDir)
                     
                     videoPath?.let { path ->
+                        // NEW: start paused so nothing plays before we know about a saved position
+                        mpv.setPropertyBoolean("pause", true)
                         playFile(path)
                         
                         coroutineScope.launch {
@@ -243,6 +421,11 @@ fun PlayerScreen(
         if (isVideoLoaded && mpvInstance != null) {
             PlayerOverlay(
                 mpv = mpvInstance!!,
+                promptMode = promptMode,
+                resumePosition = resumePosition,
+                onResumeChoice = { resumeChoice() },
+                onStartOver = { startOver() },
+                onEnded = { handleEnded() },
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -253,10 +436,21 @@ fun PlayerScreen(
 @Composable
 fun PlayerOverlay(
     mpv: MPV,
+    promptMode: Int,
+    resumePosition: Double,
+    onResumeChoice: () -> Unit,
+    onStartOver: () -> Unit,
+    onEnded: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+
+    // NEW: always-fresh values for use inside long-running effects
+    val currentPromptMode by rememberUpdatedState(promptMode)
+    val currentOnEnded by rememberUpdatedState(onEnded)
+    var promptStartX by remember { mutableStateOf(0f) }
+    val promptSwipeThreshold = 150f
     
     var currentTime by remember { mutableStateOf("00:00") }
     var totalTime by remember { mutableStateOf("00:00") }
@@ -312,6 +506,13 @@ fun PlayerOverlay(
     var isBuffering by remember { mutableStateOf(false) }
     val bufferingAlpha = remember { Animatable(0f) }
     var seekGraceUntil by remember { mutableStateOf(0L) }
+
+    // NEW: small grace period whenever a prompt closes (avoids a false "Buffering" blink)
+    LaunchedEffect(promptMode) {
+        if (promptMode == PROMPT_NONE) {
+            seekGraceUntil = System.currentTimeMillis() + 1000
+        }
+    }
     
     LaunchedEffect(showSeekbar, userInteracting) {
         if (showSeekbar && !userInteracting) {
@@ -336,7 +537,8 @@ fun PlayerOverlay(
     }
     
     // Stall detector: watches time-pos, flags buffering if it's stuck while it should be moving.
-    // Ignores pause, active seeking/dragging, and a brief grace period after any seek completes.
+    // Ignores pause, active seeking/dragging, prompts, and a brief grace period after any seek completes.
+    // NEW: also detects end of video (eof-reached, works because of keep-open) -> Replay prompt.
     LaunchedEffect(Unit) {
         var lastPosition = -1.0
         var lastChangeTime = System.currentTimeMillis()
@@ -344,11 +546,21 @@ fun PlayerOverlay(
         while (isActive) {
             delay(300)
             
-            val paused = mpv.getPropertyBoolean("pause") ?: false
             val now = System.currentTimeMillis()
+
+            if (currentPromptMode == PROMPT_NONE && !isSeeking && !isDragging && now >= seekGraceUntil) {
+                val eof = mpv.getPropertyBoolean("eof-reached") ?: false
+                if (eof) {
+                    isBuffering = false
+                    currentOnEnded()
+                    continue
+                }
+            }
+
+            val paused = mpv.getPropertyBoolean("pause") ?: false
             val inGracePeriod = now < seekGraceUntil
             
-            if (paused || isSeeking || isDragging || inGracePeriod) {
+            if (paused || isSeeking || isDragging || inGracePeriod || currentPromptMode != PROMPT_NONE) {
                 lastPosition = mpv.getPropertyDouble("time-pos") ?: lastPosition
                 lastChangeTime = now
                 if (isBuffering) isBuffering = false
@@ -606,19 +818,7 @@ fun PlayerOverlay(
     }
     
     LaunchedEffect(Unit) {
-        val intent = (context as? android.app.Activity)?.intent
-        fileName = when {
-            intent?.action == Intent.ACTION_SEND -> {
-                getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context, mpv)
-            }
-            intent?.action == Intent.ACTION_VIEW -> {
-                getFileNameFromUri(intent.data, context, mpv)
-            }
-            else -> {
-                getBestAvailableFileName(context, mpv)
-            }
-        }
-        
+        fileName = resolveDisplayName(context, mpv)
         showVideoInfo = true
         showSeekbar = true
     }
@@ -726,29 +926,49 @@ fun PlayerOverlay(
                         .fillMaxHeight()
                         .align(Alignment.Center)
                         .pointerInteropFilter { event ->
-                            when (event.action) {
-                                MotionEvent.ACTION_DOWN -> {
-                                    touchStartX = event.x
-                                    touchStartY = event.y
-                                    startLongTapDetection()
-                                    true
-                                }
-                                MotionEvent.ACTION_MOVE -> {
-                                    if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
-                                        when (checkForSwipeDirection(event.x, event.y)) {
-                                            "horizontal" -> startHorizontalSeeking(event.x)
-                                            "vertical" -> startVerticalSwipe(event.y)
-                                        }
-                                    } else if (isHorizontalSwipe) {
-                                        handleHorizontalSeeking(event.x)
+                            // NEW: while a prompt is showing, only left/right swipes are handled
+                            if (promptMode != PROMPT_NONE) {
+                                when (event.action) {
+                                    MotionEvent.ACTION_DOWN -> {
+                                        promptStartX = event.x
+                                        true
                                     }
-                                    true
+                                    MotionEvent.ACTION_UP -> {
+                                        val dx = event.x - promptStartX
+                                        if (dx > promptSwipeThreshold && promptMode == PROMPT_RESUME) {
+                                            onResumeChoice()
+                                        } else if (dx < -promptSwipeThreshold) {
+                                            onStartOver()
+                                        }
+                                        true
+                                    }
+                                    else -> true
                                 }
-                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                    endTouch()
-                                    true
+                            } else {
+                                when (event.action) {
+                                    MotionEvent.ACTION_DOWN -> {
+                                        touchStartX = event.x
+                                        touchStartY = event.y
+                                        startLongTapDetection()
+                                        true
+                                    }
+                                    MotionEvent.ACTION_MOVE -> {
+                                        if (!isHorizontalSwipe && !isVerticalSwipe && !isLongTap) {
+                                            when (checkForSwipeDirection(event.x, event.y)) {
+                                                "horizontal" -> startHorizontalSeeking(event.x)
+                                                "vertical" -> startVerticalSwipe(event.y)
+                                            }
+                                        } else if (isHorizontalSwipe) {
+                                            handleHorizontalSeeking(event.x)
+                                        }
+                                        true
+                                    }
+                                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                        endTouch()
+                                        true
+                                    }
+                                    else -> false
                                 }
-                                else -> false
                             }
                         }
                 )
@@ -762,7 +982,8 @@ fun PlayerOverlay(
             }
         }
         
-        if (showSeekbar) {
+        // NEW: seekbar hidden while a prompt is showing
+        if (showSeekbar && promptMode == PROMPT_NONE) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -843,7 +1064,7 @@ fun PlayerOverlay(
         }
         
         // Buffering indicator - dead center, driven by actual playback-position stall detection
-        if (isBuffering) {
+        if (isBuffering && promptMode == PROMPT_NONE) {
             Text(
                 text = "Buffering",
                 style = TextStyle(
@@ -854,6 +1075,28 @@ fun PlayerOverlay(
                 modifier = Modifier
                     .align(Alignment.Center)
                     .background(Color.DarkGray.copy(alpha = 0.8f * bufferingAlpha.value))
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            )
+        }
+
+        // NEW: Resume / Replay prompt - same center style as Buffering, but solid (no blink)
+        if (promptMode != PROMPT_NONE) {
+            val promptText = if (promptMode == PROMPT_RESUME) {
+                "Resume at ${formatTimeSimple(resumePosition)}?\nSwipe right to resume\nSwipe left to start over"
+            } else {
+                "Replay?\nSwipe left to start over"
+            }
+            Text(
+                text = promptText,
+                style = TextStyle(
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Center
+                ),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color.DarkGray.copy(alpha = 0.8f))
                     .padding(horizontal = 12.dp, vertical = 4.dp)
             )
         }
@@ -966,6 +1209,22 @@ private fun formatTimeSimple(seconds: Double): String {
         String.format("%02d:%02d:%02d", hours, minutes, secs)
     } else {
         String.format("%02d:%02d", minutes, secs)
+    }
+}
+
+// NEW: extracted from the overlay so the resume key and the title use the same name
+private fun resolveDisplayName(context: Context, mpv: MPV): String {
+    val intent = (context as? android.app.Activity)?.intent
+    return when {
+        intent?.action == Intent.ACTION_SEND -> {
+            getFileNameFromUri(intent.getParcelableExtra(Intent.EXTRA_STREAM), context, mpv)
+        }
+        intent?.action == Intent.ACTION_VIEW -> {
+            getFileNameFromUri(intent.data, context, mpv)
+        }
+        else -> {
+            getBestAvailableFileName(context, mpv)
+        }
     }
 }
 
