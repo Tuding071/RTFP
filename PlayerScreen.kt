@@ -124,80 +124,34 @@ private object ResumeStore {
 class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView(context, attrs) {
 
     override fun initOptions() {
-        // CPU decoding (as requested)
-        mpv.setOptionString("hwdec", "no")
+        // Hardware decoding — the real performance win. On Android this is both
+        // faster and cleaner than any stripped-down software decoder path.
+        mpv.setOptionString("hwdec", "mediacodec")
+        mpv.setOptionString("hwdec-codecs", "h264,hevc,vp9,av1,mpeg2video,mpeg4")
+
+        // Renderer + aspect
         mpv.setOptionString("vo", "gpu")
         mpv.setOptionString("keepaspect", "yes")
-        mpv.setOptionString("keep-open", "yes")
 
-        // gpu-hq: correct scaling defaults and a dithering-ready pipeline.
-        mpv.setOptionString("profile", "gpu-hq")
+        // Stay on the last frame at the end (needed for the Replay screen)
+        mpv.setOptionString("keep-open", "yes")
     }
 
     override fun postInitOptions() {
-        val cores = Runtime.getRuntime().availableProcessors().toString()
-        mpv.setOptionString("vd-lavc-threads", cores)
-        mpv.setOptionString("demuxer-lavf-threads", cores)
-        mpv.setOptionString("cache-initial", "0.5")
-
-        mpv.setOptionString("hr-seek", "yes")
-        mpv.setOptionString("hr-seek-framedrop", "no")
-
-        // ===== Smoother scaling for low-res sources (480p / 720p) =====
-        // spline36 is sharp enough to look clean but does NOT aggressively
-        // emphasize compression artifacts the way ewa_lanczos does on upscales.
-        mpv.setOptionString("scale",  "spline36")
-        mpv.setOptionString("cscale", "spline36")
-        mpv.setOptionString("dscale", "lanczos")
-        mpv.setOptionString("tscale", "oversample")
-
-        // sigmoid-upscaling ON: prevents ringing artifacts during upscale
-        mpv.setOptionString("correct-downscaling", "yes")
-        mpv.setOptionString("linear-downscaling",  "yes")
-        mpv.setOptionString("sigmoid-upscaling",   "yes")
-
-        // Disable anti-ringing — it can introduce its own artifacts and is
-        // unnecessary with the softer spline36 scaler.
-        mpv.setOptionString("scale-antiring",  "0.0")
-        mpv.setOptionString("cscale-antiring", "0.0")
-
-        // Subtle blur during upscale hides blockiness in low-bitrate sources.
-        mpv.setOptionString("scale-blur", "0.3")
-
-        // Deband — ON but minimal grain so we don't add noise to already-noisy 480p.
-        mpv.setOptionString("deband",            "yes")
-        mpv.setOptionString("deband-iterations", "3")
-        mpv.setOptionString("deband-threshold",  "40")
-        mpv.setOptionString("deband-range",      "16")
-        mpv.setOptionString("deband-grain",      "6")
-
-        // Dither — quiet, no animated noise.
-        mpv.setOptionString("dither-depth",    "auto")
-        mpv.setOptionString("dither",          "ordered")
-        mpv.setOptionString("temporal-dither", "no")
-
-        // Interpolation off — this was the slowdown.
-        mpv.setOptionString("interpolation", "no")
-        mpv.setOptionString("video-sync",    "audio")
-
-        // Tone mapping — mobius preserves highlight detail instead of clipping it.
-        mpv.setOptionString("tone-mapping",     "mobius")
-        mpv.setOptionString("hdr-compute-peak", "yes")
-
-        // Direct rendering (no quality loss, better perf)
-        mpv.setOptionString("vd-lavc-dr", "yes")
-
-        // Audio
-        mpv.setOptionString("audio-channels",   "auto")
-        mpv.setOptionString("audio-samplerate", "auto")
-
-        // Video
-        mpv.setOptionString("video-aspect-override", "no")
-
-        // Network streaming (HLS/M3U8) - tolerate slow connections
+        // Network streaming (HLS/M3U8) — tolerate slow connections.
+        // Only needed if you stream over the network; harmless for local files.
+        mpv.setOptionString("cache", "yes")
+        mpv.setOptionString("cache-secs", "30")
         mpv.setOptionString("network-timeout", "60")
-        mpv.setOptionString("cache",           "yes")
-        mpv.setOptionString("cache-secs",      "30")
+
+        // Seeking quality (kept — this improves seek behavior, doesn't cost quality)
+        mpv.setOptionString("hr-seek", "yes")
+
+        // Light deband to avoid banding on gradients / dark scenes (1 pass is cheap)
+        mpv.setOptionString("deband", "yes")
+        mpv.setOptionString("deband-iterations", "1")
+        mpv.setOptionString("deband-threshold", "32")
+        mpv.setOptionString("deband-range", "16")
     }
 
     override fun observeProperties() {}
