@@ -130,60 +130,51 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         mpv.setOptionString("keepaspect", "yes")
         mpv.setOptionString("keep-open", "yes")
 
-        // gpu-hq: enables correct scaling defaults, dithering-ready pipeline,
-        // and other quality-first GPU settings. Replaces profile=fast.
+        // gpu-hq: enables correct scaling defaults and a dithering-ready pipeline.
         mpv.setOptionString("profile", "gpu-hq")
     }
 
     override fun postInitOptions() {
-        // Threads don't affect quality — scale to the device instead of hardcoded 8
         val cores = Runtime.getRuntime().availableProcessors().toString()
         mpv.setOptionString("vd-lavc-threads", cores)
         mpv.setOptionString("demuxer-lavf-threads", cores)
         mpv.setOptionString("cache-initial", "0.5")
 
-        // Seeking — precise, but do NOT drop frames on seek (quality > instant)
         mpv.setOptionString("hr-seek", "yes")
         mpv.setOptionString("hr-seek-framedrop", "no")
 
-        // --- REMOVED quality-killers ---
-        // vd-lavc-fast / vd-lavc-skiploopfilter / vd-lavc-skipidct  → these traded picture quality for speed
-        // untimed=yes                                                  → can desync A/V & break interpolation
-        // gpu-dumb-mode=yes                                            → disables GPU features we now want
-        // opengl-pbo / opengl-early-flush                              → speed tweaks, not needed
+        // Scalers — keep ewa_lanczos (it's genuinely the sharpest non-AI scaler)
+        mpv.setOptionString("scale",  "ewa_lanczos")
+        mpv.setOptionString("cscale", "ewa_lanczossoft")
+        mpv.setOptionString("dscale", "lanczos")
+        mpv.setOptionString("tscale", "oversample")
 
-        // Quality scalers
-        mpv.setOptionString("scale",  "ewa_lanczos")       // upscale (sharp, good on mobile GPU)
-        mpv.setOptionString("cscale", "ewa_lanczossoft")   // chroma upscale
-        mpv.setOptionString("dscale", "mitchell")          // downscale (no ringing)
-        mpv.setOptionString("tscale", "oversample")        // temporal
-
-        // Correct, physically-accurate scaling order
+        // Correct scaling — but DROP sigmoid-upscaling, it amplifies source artifacts
         mpv.setOptionString("correct-downscaling", "yes")
-        mpv.setOptionString("linear-downscaling", "yes")
-        mpv.setOptionString("sigmoid-upscaling",   "yes")
+        mpv.setOptionString("linear-downscaling",  "yes")
+        mpv.setOptionString("sigmoid-upscaling",   "no")
 
-        // Debanding — kills banding on skies, gradients, dark scenes (big visual win)
+        // Deband — ON but gentler. High grain = visible noise on flat areas.
         mpv.setOptionString("deband",            "yes")
-        mpv.setOptionString("deband-iterations", "4")
-        mpv.setOptionString("deband-threshold",  "64")
-        mpv.setOptionString("deband-range",      "20")
-        mpv.setOptionString("deband-grain",      "48")
+        mpv.setOptionString("deband-iterations", "3")
+        mpv.setOptionString("deband-threshold",  "40")
+        mpv.setOptionString("deband-range",      "16")
+        mpv.setOptionString("deband-grain",      "12")
 
-        // Dithering to display bit depth (removes residual banding)
-        mpv.setOptionString("dither-depth",   "auto")
-        mpv.setOptionString("dither",         "fruit")
-        mpv.setOptionString("temporal-dither","yes")
+        // Dither — quieter. "ordered" is nearly invisible; no animated noise.
+        mpv.setOptionString("dither-depth",    "auto")
+        mpv.setOptionString("dither",          "ordered")
+        mpv.setOptionString("temporal-dither", "no")
 
-        // Smooth motion — drop this pair if playback stutters on low-end devices
-        mpv.setOptionString("interpolation", "yes")
-        mpv.setOptionString("video-sync",    "display-resample")
+        // Interpolation — this is what was making it slow. Off.
+        mpv.setOptionString("interpolation", "no")
+        mpv.setOptionString("video-sync",    "audio")
 
-        // HDR passthrough / tonemapping
-        mpv.setOptionString("tone-mapping",   "auto")
-        mpv.setOptionString("hdr-compute-peak","yes")
+        // Tone mapping — mobius preserves highlight detail instead of clipping it.
+        mpv.setOptionString("tone-mapping",    "mobius")
+        mpv.setOptionString("hdr-compute-peak", "yes")
 
-        // Direct rendering (no quality loss, better perf — keep it)
+        // Direct rendering (no quality loss, better perf)
         mpv.setOptionString("vd-lavc-dr", "yes")
 
         // Audio
