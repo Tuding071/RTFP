@@ -130,7 +130,7 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         mpv.setOptionString("keepaspect", "yes")
         mpv.setOptionString("keep-open", "yes")
 
-        // gpu-hq: enables correct scaling defaults and a dithering-ready pipeline.
+        // gpu-hq: correct scaling defaults and a dithering-ready pipeline.
         mpv.setOptionString("profile", "gpu-hq")
     }
 
@@ -143,35 +143,45 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         mpv.setOptionString("hr-seek", "yes")
         mpv.setOptionString("hr-seek-framedrop", "no")
 
-        // Scalers — keep ewa_lanczos (it's genuinely the sharpest non-AI scaler)
-        mpv.setOptionString("scale",  "ewa_lanczos")
-        mpv.setOptionString("cscale", "ewa_lanczossoft")
+        // ===== Smoother scaling for low-res sources (480p / 720p) =====
+        // spline36 is sharp enough to look clean but does NOT aggressively
+        // emphasize compression artifacts the way ewa_lanczos does on upscales.
+        mpv.setOptionString("scale",  "spline36")
+        mpv.setOptionString("cscale", "spline36")
         mpv.setOptionString("dscale", "lanczos")
         mpv.setOptionString("tscale", "oversample")
 
-        // Correct scaling — but DROP sigmoid-upscaling, it amplifies source artifacts
+        // sigmoid-upscaling ON: prevents ringing artifacts during upscale
         mpv.setOptionString("correct-downscaling", "yes")
         mpv.setOptionString("linear-downscaling",  "yes")
-        mpv.setOptionString("sigmoid-upscaling",   "no")
+        mpv.setOptionString("sigmoid-upscaling",   "yes")
 
-        // Deband — ON but gentler. High grain = visible noise on flat areas.
+        // Disable anti-ringing — it can introduce its own artifacts and is
+        // unnecessary with the softer spline36 scaler.
+        mpv.setOptionString("scale-antiring",  "0.0")
+        mpv.setOptionString("cscale-antiring", "0.0")
+
+        // Subtle blur during upscale hides blockiness in low-bitrate sources.
+        mpv.setOptionString("scale-blur", "0.3")
+
+        // Deband — ON but minimal grain so we don't add noise to already-noisy 480p.
         mpv.setOptionString("deband",            "yes")
         mpv.setOptionString("deband-iterations", "3")
         mpv.setOptionString("deband-threshold",  "40")
         mpv.setOptionString("deband-range",      "16")
-        mpv.setOptionString("deband-grain",      "12")
+        mpv.setOptionString("deband-grain",      "6")
 
-        // Dither — quieter. "ordered" is nearly invisible; no animated noise.
+        // Dither — quiet, no animated noise.
         mpv.setOptionString("dither-depth",    "auto")
         mpv.setOptionString("dither",          "ordered")
         mpv.setOptionString("temporal-dither", "no")
 
-        // Interpolation — this is what was making it slow. Off.
+        // Interpolation off — this was the slowdown.
         mpv.setOptionString("interpolation", "no")
         mpv.setOptionString("video-sync",    "audio")
 
         // Tone mapping — mobius preserves highlight detail instead of clipping it.
-        mpv.setOptionString("tone-mapping",    "mobius")
+        mpv.setOptionString("tone-mapping",     "mobius")
         mpv.setOptionString("hdr-compute-peak", "yes")
 
         // Direct rendering (no quality loss, better perf)
