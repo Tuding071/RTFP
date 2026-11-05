@@ -38,35 +38,12 @@ import java.io.File
 import kotlin.math.abs
 import kotlin.math.sign
 
-// ===== prompt modes =====
+// ===== NEW: prompt modes =====
 private const val PROMPT_NONE = 0
 private const val PROMPT_RESUME = 1
 private const val PROMPT_REPLAY = 2
 
-// ===== seek mode (speed hacks ON only while scrubbing, OFF for normal playback) =====
-private fun safeSetProp(mpv: MPV, name: String, value: String) {
-    try {
-        mpv.setPropertyString(name, value)
-    } catch (e: Exception) {
-        Log.d("PlayerDebug", "setProperty failed: $name=$value")
-    }
-}
-
-private fun applySeekMode(mpv: MPV, enabled: Boolean) {
-    if (enabled) {
-        safeSetProp(mpv, "untimed", "yes")
-        safeSetProp(mpv, "vd-lavc-fast", "yes")
-        safeSetProp(mpv, "vd-lavc-skiploopfilter", "all")
-        safeSetProp(mpv, "vd-lavc-skipidct", "all")
-    } else {
-        safeSetProp(mpv, "untimed", "no")
-        safeSetProp(mpv, "vd-lavc-fast", "no")
-        safeSetProp(mpv, "vd-lavc-skiploopfilter", "default")
-        safeSetProp(mpv, "vd-lavc-skipidct", "default")
-    }
-}
-
-// ===== resume position storage (one entry per file/link, max 200, oldest dropped) =====
+// ===== NEW: resume position storage (one entry per file/link, max 200, oldest dropped) =====
 private object ResumeStore {
     private const val PREFS = "rtfp_resume"
     private const val ENTRIES = "entries"
@@ -151,7 +128,7 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         mpv.setOptionString("vo", "gpu")
         mpv.setOptionString("profile", "fast")
         mpv.setOptionString("keepaspect", "yes")
-        // stay on the last frame at the end (needed for the Replay screen)
+        // NEW: stay on the last frame at the end (needed for the Replay screen)
         mpv.setOptionString("keep-open", "yes")
     }
 
@@ -160,17 +137,12 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         mpv.setOptionString("vd-lavc-threads", "8")
         mpv.setOptionString("demuxer-lavf-threads", "8")
         mpv.setOptionString("cache-initial", "0.5")
+        mpv.setOptionString("untimed", "yes")
         
         // Seeking
         mpv.setOptionString("hr-seek", "yes")
         mpv.setOptionString("hr-seek-framedrop", "yes")
         
-        // these four start at NORMAL values; seek mode turns them on while scrubbing
-        mpv.setOptionString("untimed", "no")
-        mpv.setOptionString("vd-lavc-fast", "no")
-        mpv.setOptionString("vd-lavc-skiploopfilter", "default")
-        mpv.setOptionString("vd-lavc-skipidct", "default")
-        mpv.setOptionString("vd-lavc-assemble", "yes")
         
         // GPU
         mpv.setOptionString("gpu-dumb-mode", "yes")
@@ -207,7 +179,7 @@ fun PlayerScreen(
     var savedPosition by remember { mutableStateOf<Double?>(null) }
     val coroutineScope = rememberCoroutineScope()
 
-    // ===== resume / replay state =====
+    // ===== NEW: resume / replay state =====
     var promptMode by remember { mutableStateOf(PROMPT_NONE) }
     var resumePosition by remember { mutableStateOf(0.0) }
     var resumeKey by remember { mutableStateOf<String?>(null) }
@@ -269,7 +241,7 @@ fun PlayerScreen(
         }
     }
 
-    // once loaded, look up saved position and decide: prompt or play
+    // ===== NEW: once loaded, look up saved position and decide: prompt or play =====
     LaunchedEffect(isVideoLoaded) {
         if (!isVideoLoaded) return@LaunchedEffect
         val m = mpvInstance ?: return@LaunchedEffect
@@ -299,7 +271,7 @@ fun PlayerScreen(
         }
     }
 
-    // backup save every 5s while playing
+    // ===== NEW: backup save every 5s while playing =====
     LaunchedEffect(trackingEnabled, mpvInstance) {
         val m = mpvInstance ?: return@LaunchedEffect
         while (trackingEnabled && isActive) {
@@ -364,10 +336,8 @@ fun PlayerScreen(
             when (event) {
                 Lifecycle.Event.ON_PAUSE -> {
                     mpvView?.let { view ->
-                        // make sure seek mode is never left on if the app is backgrounded mid-drag
-                        applySeekMode(view.mpv, false)
                         savedPosition = view.mpv.getPropertyDouble("time-pos")
-                        // main save point (back / home / recents all pass through here)
+                        // NEW: main save point (back / home / recents all pass through here)
                         saveProgress()
                         view.mpv.setPropertyBoolean("pause", true)
                     }
@@ -401,7 +371,7 @@ fun PlayerScreen(
                     initialize(filesDir, cacheDir)
                     
                     videoPath?.let { path ->
-                        // start paused so nothing plays before we know about a saved position
+                        // NEW: start paused so nothing plays before we know about a saved position
                         mpv.setPropertyBoolean("pause", true)
                         playFile(path)
                         
@@ -471,7 +441,7 @@ fun PlayerOverlay(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    // always-fresh values for use inside long-running effects
+    // NEW: always-fresh values for use inside long-running effects
     val currentPromptMode by rememberUpdatedState(promptMode)
     val currentOnEnded by rememberUpdatedState(onEnded)
     var promptStartX by remember { mutableStateOf(0f) }
@@ -495,11 +465,6 @@ fun PlayerOverlay(
     var seekDirection by remember { mutableStateOf("") }
     var isSeekInProgress by remember { mutableStateOf(false) }
     val seekThrottleMs = 11L
-
-    // NEW: seek-mode setup gate. Seeks are blocked until the options have settled.
-    val seekModeSwitchDelayMs = 50L
-    var seekReady by remember { mutableStateOf(false) }
-    var seekSetupJob by remember { mutableStateOf<Job?>(null) }
     
     var lastSeekTime by remember { mutableStateOf(0L) }
     var lastHorizontalUpdateTime by remember { mutableStateOf(0L) }
@@ -537,7 +502,7 @@ fun PlayerOverlay(
     val bufferingAlpha = remember { Animatable(0f) }
     var seekGraceUntil by remember { mutableStateOf(0L) }
 
-    // small grace period whenever a prompt closes (avoids a false "Buffering" blink)
+    // NEW: small grace period whenever a prompt closes (avoids a false "Buffering" blink)
     LaunchedEffect(promptMode) {
         if (promptMode == PROMPT_NONE) {
             seekGraceUntil = System.currentTimeMillis() + 1000
@@ -568,7 +533,7 @@ fun PlayerOverlay(
     
     // Stall detector: watches time-pos, flags buffering if it's stuck while it should be moving.
     // Ignores pause, active seeking/dragging, prompts, and a brief grace period after any seek completes.
-    // Also detects end of video (eof-reached, works because of keep-open) -> Replay prompt.
+    // NEW: also detects end of video (eof-reached, works because of keep-open) -> Replay prompt.
     LaunchedEffect(Unit) {
         var lastPosition = -1.0
         var lastChangeTime = System.currentTimeMillis()
@@ -647,8 +612,6 @@ fun PlayerOverlay(
     }
     
     fun performSmoothSeek(targetPosition: Double) {
-        // NEW: blocked until seek-mode setup has finished
-        if (!seekReady) return
         if (isSeekInProgress) return
         isSeekInProgress = true
         mpv.command("seek", targetPosition.toString(), "absolute", "exact")
@@ -659,8 +622,6 @@ fun PlayerOverlay(
     }
     
     fun performStepSeek(targetPosition: Double) {
-        // NEW: blocked until seek-mode setup has finished
-        if (!seekReady) return
         if (isSeekInProgress) return
         isSeekInProgress = true
         val roundedPosition = (targetPosition + 0.5).toInt().toDouble()
@@ -669,32 +630,6 @@ fun PlayerOverlay(
             delay(seekThrottleMs)
             isSeekInProgress = false
         }
-    }
-
-    // NEW: begin seek mode. Order: (already paused) -> options ON -> wait -> clean re-seek -> allow seeks
-    fun beginSeekMode(startPos: Double) {
-        seekReady = false
-        if (wasPlayingBeforeSeek) {
-            mpv.setPropertyBoolean("pause", true)
-        }
-        applySeekMode(mpv, true)
-        seekSetupJob?.cancel()
-        seekSetupJob = coroutineScope.launch {
-            delay(seekModeSwitchDelayMs)
-            // only continue if the user is still scrubbing (not released during the delay)
-            if (isSeeking) {
-                mpv.command("seek", startPos.toString(), "absolute", "exact")
-                seekReady = true
-            }
-        }
-    }
-
-    // NEW: end seek mode. Cancels any pending setup, closes the gate, options OFF
-    fun endSeekMode() {
-        seekSetupJob?.cancel()
-        seekSetupJob = null
-        seekReady = false
-        applySeekMode(mpv, false)
     }
     
     fun getFreshPosition(): Float {
@@ -780,8 +715,9 @@ fun PlayerOverlay(
         showSeekbar = true
         showVideoInfo = true
         
-        // NEW: pause first -> seek options on -> 50ms wait -> clean re-seek (all inside beginSeekMode)
-        beginSeekMode(seekStartPosition)
+        if (wasPlayingBeforeSeek) {
+            mpv.setPropertyBoolean("pause", true)
+        }
         
         lastSeekTime = 0L
         lastHorizontalUpdateTime = 0L
@@ -830,11 +766,8 @@ fun PlayerOverlay(
     
     fun endHorizontalSeeking() {
         if (isSeeking) {
-            // NEW: closes the gate, cancels pending setup, options OFF
-            endSeekMode()
-            // then one clean exact re-seek to settle on a fully decoded frame
             val currentPos = mpv.getPropertyDouble("time-pos") ?: seekStartPosition
-            mpv.command("seek", currentPos.toString(), "absolute", "exact")
+            performSmoothSeek(currentPos)
             
             if (wasPlayingBeforeSeek) {
                 coroutineScope.launch {
@@ -925,9 +858,9 @@ fun PlayerOverlay(
             showSeekbar = true
             showVideoInfo = true
             
-            // NEW: pause first -> seek options on -> 50ms wait -> clean re-seek (all inside beginSeekMode)
-            val startPos = mpv.getPropertyDouble("time-pos") ?: 0.0
-            beginSeekMode(startPos)
+            if (wasPlayingBeforeSeek) {
+                mpv.setPropertyBoolean("pause", true)
+            }
         }
         isDragging = true
         val oldPosition = seekbarPosition
@@ -942,13 +875,6 @@ fun PlayerOverlay(
     
     fun handleDragFinished() {
         isDragging = false
-        // NEW: closes the gate, cancels pending setup, options OFF
-        endSeekMode()
-        // then one clean exact re-seek to settle on a fully decoded frame
-        val settlePos = mpv.getPropertyDouble("time-pos")
-        if (settlePos != null) {
-            mpv.command("seek", settlePos.toString(), "absolute", "exact")
-        }
         if (wasPlayingBeforeSeek) {
             coroutineScope.launch {
                 delay(100)
@@ -995,7 +921,7 @@ fun PlayerOverlay(
                         .fillMaxHeight()
                         .align(Alignment.Center)
                         .pointerInteropFilter { event ->
-                            // while a prompt is showing, only left/right swipes are handled
+                            // NEW: while a prompt is showing, only left/right swipes are handled
                             if (promptMode != PROMPT_NONE) {
                                 when (event.action) {
                                     MotionEvent.ACTION_DOWN -> {
@@ -1051,7 +977,7 @@ fun PlayerOverlay(
             }
         }
         
-        // seekbar hidden while a prompt is showing
+        // NEW: seekbar hidden while a prompt is showing
         if (showSeekbar && promptMode == PROMPT_NONE) {
             Box(
                 modifier = Modifier
@@ -1148,7 +1074,7 @@ fun PlayerOverlay(
             )
         }
 
-        // Resume / Replay prompt - same center style as Buffering, but solid (no blink)
+        // NEW: Resume / Replay prompt - same center style as Buffering, but solid (no blink)
         if (promptMode != PROMPT_NONE) {
             val promptText = if (promptMode == PROMPT_RESUME) {
                 "Resume at ${formatTimeSimple(resumePosition)}?\nSwipe right to resume\nSwipe left to start over"
@@ -1281,7 +1207,7 @@ private fun formatTimeSimple(seconds: Double): String {
     }
 }
 
-// shared by the resume key and the title so both use the same name
+// NEW: extracted from the overlay so the resume key and the title use the same name
 private fun resolveDisplayName(context: Context, mpv: MPV): String {
     val intent = (context as? android.app.Activity)?.intent
     return when {
