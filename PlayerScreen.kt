@@ -186,6 +186,10 @@ fun PlayerScreen(
     var trackingEnabled by remember { mutableStateOf(false) }
     var ignoreEndUntil by remember { mutableStateOf(0L) }
 
+    // NEW: true while the user is seeking/dragging (reported by PlayerOverlay).
+    // Polling loops in this screen skip their MPV calls while it's true.
+    var userSeeking by remember { mutableStateOf(false) }
+
     // Saves current position (or clears the entry when within 5s of the end)
     fun saveProgress() {
         val key = resumeKey ?: return
@@ -276,6 +280,8 @@ fun PlayerScreen(
         val m = mpvInstance ?: return@LaunchedEffect
         while (trackingEnabled && isActive) {
             delay(5000)
+            // NEW: no MPV calls while the user is seeking/dragging
+            if (userSeeking) continue
             val paused = m.getPropertyBoolean("pause") ?: false
             if (!paused) saveProgress()
         }
@@ -296,6 +302,10 @@ fun PlayerScreen(
                 
                 while (isActive) {
                     delay(1000)
+
+                    // NEW: no MPV calls while the user is seeking/dragging
+                    // (also stops the drag-pause from starting the idle countdown)
+                    if (userSeeking) continue
                     
                     val paused = mpv.getPropertyBoolean("pause") ?: false
                     val position = mpv.getPropertyDouble("time-pos") ?: 0.0
@@ -421,6 +431,7 @@ fun PlayerScreen(
                 onResumeChoice = { resumeChoice() },
                 onStartOver = { startOver() },
                 onEnded = { handleEnded() },
+                onSeekingChanged = { userSeeking = it },
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -436,6 +447,7 @@ fun PlayerOverlay(
     onResumeChoice: () -> Unit,
     onStartOver: () -> Unit,
     onEnded: () -> Unit,
+    onSeekingChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -502,6 +514,11 @@ fun PlayerOverlay(
     val bufferingAlpha = remember { Animatable(0f) }
     var seekGraceUntil by remember { mutableStateOf(0L) }
 
+    // NEW: tell PlayerScreen when the user is seeking so its polling loops can stand down
+    LaunchedEffect(isSeeking, isDragging) {
+        onSeekingChanged(isSeeking || isDragging)
+    }
+
     // NEW: small grace period whenever a prompt closes (avoids a false "Buffering" blink)
     LaunchedEffect(promptMode) {
         if (promptMode == PROMPT_NONE) {
@@ -552,10 +569,18 @@ fun PlayerOverlay(
                 }
             }
 
+            // NEW: seeking/dragging -> zero MPV calls, just keep the timers fresh.
+            // lastPosition goes stale here, but the grace period after the drag refreshes it.
+            if (isSeeking || isDragging) {
+                lastChangeTime = now
+                if (isBuffering) isBuffering = false
+                continue
+            }
+
             val paused = mpv.getPropertyBoolean("pause") ?: false
             val inGracePeriod = now < seekGraceUntil
             
-            if (paused || isSeeking || isDragging || inGracePeriod || currentPromptMode != PROMPT_NONE) {
+            if (paused || inGracePeriod || currentPromptMode != PROMPT_NONE) {
                 lastPosition = mpv.getPropertyDouble("time-pos") ?: lastPosition
                 lastChangeTime = now
                 if (isBuffering) isBuffering = false
@@ -834,16 +859,16 @@ fun PlayerOverlay(
         }
         
         while (isActive) {
-            val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
-            val currentDuration = mpv.getPropertyDouble("duration") ?: duration
-            
+            // NEW: no MPV calls while the user is seeking/dragging
             if (!isSeeking && !isDragging) {
+                val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
+                val currentDuration = mpv.getPropertyDouble("duration") ?: duration
+                
                 currentTime = formatTimeSimple(currentPos)
                 seekbarPosition = currentPos.toFloat()
+                totalTime = formatTimeSimple(currentDuration)
+                seekbarDuration = currentDuration.toFloat()
             }
-            
-            totalTime = formatTimeSimple(currentDuration)
-            seekbarDuration = currentDuration.toFloat()
             
             delay(100)
         }
