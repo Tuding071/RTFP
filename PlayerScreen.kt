@@ -134,8 +134,8 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
 
     override fun postInitOptions() {
         // Performance
-        mpv.setOptionString("vd-lavc-threads", "8")
-        mpv.setOptionString("demuxer-lavf-threads", "8")
+        mpv.setOptionString("vd-lavc-threads", "4")
+        mpv.setOptionString("demuxer-lavf-threads", "4")
         mpv.setOptionString("cache-initial", "0.5")
         mpv.setOptionString("untimed", "yes")
         
@@ -477,6 +477,13 @@ fun PlayerOverlay(
     var seekDirection by remember { mutableStateOf("") }
     var isSeekInProgress by remember { mutableStateOf(false) }
     val seekThrottleMs = 11L
+
+    // NEW: staged seekbar drag start - the first-touch work is spread over stages
+    // (1 = UI only, 2 = pause, 3 = seeking live), each separated by dragStageDelayMs
+    val dragStageDelayMs = 50L
+    var dragStage by remember { mutableStateOf(0) } // 0 idle, 1 UI shown, 2 paused, 3 seeking live
+    var dragJob by remember { mutableStateOf<Job?>(null) }
+    var latestDragPosition by remember { mutableStateOf(0f) }
     
     var lastSeekTime by remember { mutableStateOf(0L) }
     var lastHorizontalUpdateTime by remember { mutableStateOf(0L) }
@@ -877,16 +884,30 @@ fun PlayerOverlay(
     fun handleProgressBarDrag(newPosition: Float) {
         cancelAutoHide()
         if (!isSeeking) {
+            // Stage 1 (instant): UI state only, zero MPV calls
             isSeeking = true
-            wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
             showSeekTime = true
             showSeekbar = true
             showVideoInfo = true
-            
-            if (wasPlayingBeforeSeek) {
-                mpv.setPropertyBoolean("pause", true)
+            dragStage = 1
+            dragJob?.cancel()
+            dragJob = coroutineScope.launch {
+                // Stage 2: pause (only if it was playing)
+                delay(dragStageDelayMs)
+                wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
+                if (wasPlayingBeforeSeek) {
+                    mpv.setPropertyBoolean("pause", true)
+                }
+                dragStage = 2
+
+                // Stage 3: first seek, using the latest finger position (not the touch-down one)
+                delay(dragStageDelayMs)
+                dragStage = 3
+                performStepSeek(latestDragPosition.toDouble())
             }
+            
         }
+        latestDragPosition = newPosition
         isDragging = true
         val oldPosition = seekbarPosition
         seekbarPosition = newPosition
@@ -895,11 +916,20 @@ fun PlayerOverlay(
         seekTargetTime = formatTimeSimple(targetPosition)
         currentTime = formatTimeSimple(targetPosition)
         
-        performStepSeek(targetPosition)
+        // NEW: seeks only go out once stage 3 is reached (stage 3 itself does the first one)
+        if (dragStage == 3) performStepSeek(targetPosition)
     }
     
     fun handleDragFinished() {
         isDragging = false
+        // NEW: cancel any stage that hasn't run yet
+        dragJob?.cancel()
+        dragJob = null
+        if (dragStage == 1 || dragStage == 2) {
+            // Lifted before the first seek went live: still land on the final position
+            mpv.command("seek", latestDragPosition.toString(), "absolute", "exact")
+        }
+        dragStage = 0
         if (wasPlayingBeforeSeek) {
             coroutineScope.launch {
                 delay(100)
