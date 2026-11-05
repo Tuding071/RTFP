@@ -43,7 +43,7 @@ private const val PROMPT_NONE = 0
 private const val PROMPT_RESUME = 1
 private const val PROMPT_REPLAY = 2
 
-// ===== NEW: seek mode (speed hacks ON only while scrubbing, OFF for normal playback) =====
+// ===== seek mode (speed hacks ON only while scrubbing, OFF for normal playback) =====
 private fun safeSetProp(mpv: MPV, name: String, value: String) {
     try {
         mpv.setPropertyString(name, value)
@@ -165,7 +165,7 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
         mpv.setOptionString("hr-seek", "yes")
         mpv.setOptionString("hr-seek-framedrop", "yes")
         
-        // NEW: these four now start at NORMAL values; seek mode turns them on while scrubbing
+        // these four start at NORMAL values; seek mode turns them on while scrubbing
         mpv.setOptionString("untimed", "no")
         mpv.setOptionString("vd-lavc-fast", "no")
         mpv.setOptionString("vd-lavc-skiploopfilter", "default")
@@ -364,7 +364,7 @@ fun PlayerScreen(
             when (event) {
                 Lifecycle.Event.ON_PAUSE -> {
                     mpvView?.let { view ->
-                        // NEW: make sure seek mode is never left on if the app is backgrounded mid-drag
+                        // make sure seek mode is never left on if the app is backgrounded mid-drag
                         applySeekMode(view.mpv, false)
                         savedPosition = view.mpv.getPropertyDouble("time-pos")
                         // main save point (back / home / recents all pass through here)
@@ -495,6 +495,11 @@ fun PlayerOverlay(
     var seekDirection by remember { mutableStateOf("") }
     var isSeekInProgress by remember { mutableStateOf(false) }
     val seekThrottleMs = 11L
+
+    // NEW: seek-mode setup gate. Seeks are blocked until the options have settled.
+    val seekModeSwitchDelayMs = 50L
+    var seekReady by remember { mutableStateOf(false) }
+    var seekSetupJob by remember { mutableStateOf<Job?>(null) }
     
     var lastSeekTime by remember { mutableStateOf(0L) }
     var lastHorizontalUpdateTime by remember { mutableStateOf(0L) }
@@ -642,6 +647,8 @@ fun PlayerOverlay(
     }
     
     fun performSmoothSeek(targetPosition: Double) {
+        // NEW: blocked until seek-mode setup has finished
+        if (!seekReady) return
         if (isSeekInProgress) return
         isSeekInProgress = true
         mpv.command("seek", targetPosition.toString(), "absolute", "exact")
@@ -652,6 +659,8 @@ fun PlayerOverlay(
     }
     
     fun performStepSeek(targetPosition: Double) {
+        // NEW: blocked until seek-mode setup has finished
+        if (!seekReady) return
         if (isSeekInProgress) return
         isSeekInProgress = true
         val roundedPosition = (targetPosition + 0.5).toInt().toDouble()
@@ -660,6 +669,32 @@ fun PlayerOverlay(
             delay(seekThrottleMs)
             isSeekInProgress = false
         }
+    }
+
+    // NEW: begin seek mode. Order: (already paused) -> options ON -> wait -> clean re-seek -> allow seeks
+    fun beginSeekMode(startPos: Double) {
+        seekReady = false
+        if (wasPlayingBeforeSeek) {
+            mpv.setPropertyBoolean("pause", true)
+        }
+        applySeekMode(mpv, true)
+        seekSetupJob?.cancel()
+        seekSetupJob = coroutineScope.launch {
+            delay(seekModeSwitchDelayMs)
+            // only continue if the user is still scrubbing (not released during the delay)
+            if (isSeeking) {
+                mpv.command("seek", startPos.toString(), "absolute", "exact")
+                seekReady = true
+            }
+        }
+    }
+
+    // NEW: end seek mode. Cancels any pending setup, closes the gate, options OFF
+    fun endSeekMode() {
+        seekSetupJob?.cancel()
+        seekSetupJob = null
+        seekReady = false
+        applySeekMode(mpv, false)
     }
     
     fun getFreshPosition(): Float {
@@ -737,8 +772,6 @@ fun PlayerOverlay(
     fun startHorizontalSeeking(startX: Float) {
         isHorizontalSwipe = true
         cancelAutoHide()
-        // NEW: speed hacks ON while scrubbing
-        applySeekMode(mpv, true)
         seekStartX = startX
         seekStartPosition = mpv.getPropertyDouble("time-pos") ?: 0.0
         wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
@@ -747,9 +780,8 @@ fun PlayerOverlay(
         showSeekbar = true
         showVideoInfo = true
         
-        if (wasPlayingBeforeSeek) {
-            mpv.setPropertyBoolean("pause", true)
-        }
+        // NEW: pause first -> seek options on -> 50ms wait -> clean re-seek (all inside beginSeekMode)
+        beginSeekMode(seekStartPosition)
         
         lastSeekTime = 0L
         lastHorizontalUpdateTime = 0L
@@ -798,8 +830,9 @@ fun PlayerOverlay(
     
     fun endHorizontalSeeking() {
         if (isSeeking) {
-            // NEW: speed hacks OFF, then one clean exact re-seek to settle on a fully decoded frame
-            applySeekMode(mpv, false)
+            // NEW: closes the gate, cancels pending setup, options OFF
+            endSeekMode()
+            // then one clean exact re-seek to settle on a fully decoded frame
             val currentPos = mpv.getPropertyDouble("time-pos") ?: seekStartPosition
             mpv.command("seek", currentPos.toString(), "absolute", "exact")
             
@@ -887,16 +920,14 @@ fun PlayerOverlay(
         cancelAutoHide()
         if (!isSeeking) {
             isSeeking = true
-            // NEW: speed hacks ON while scrubbing
-            applySeekMode(mpv, true)
             wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
             showSeekTime = true
             showSeekbar = true
             showVideoInfo = true
             
-            if (wasPlayingBeforeSeek) {
-                mpv.setPropertyBoolean("pause", true)
-            }
+            // NEW: pause first -> seek options on -> 50ms wait -> clean re-seek (all inside beginSeekMode)
+            val startPos = mpv.getPropertyDouble("time-pos") ?: 0.0
+            beginSeekMode(startPos)
         }
         isDragging = true
         val oldPosition = seekbarPosition
@@ -911,8 +942,9 @@ fun PlayerOverlay(
     
     fun handleDragFinished() {
         isDragging = false
-        // NEW: speed hacks OFF, then one clean exact re-seek to settle on a fully decoded frame
-        applySeekMode(mpv, false)
+        // NEW: closes the gate, cancels pending setup, options OFF
+        endSeekMode()
+        // then one clean exact re-seek to settle on a fully decoded frame
         val settlePos = mpv.getPropertyDouble("time-pos")
         if (settlePos != null) {
             mpv.command("seek", settlePos.toString(), "absolute", "exact")
