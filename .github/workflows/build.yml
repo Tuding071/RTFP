@@ -105,7 +105,7 @@ jobs:
 
             buildTypes {
                 debug {
-                    debuggable true
+                    debuggable false
                 }
             }
 
