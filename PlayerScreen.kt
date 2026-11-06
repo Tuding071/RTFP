@@ -135,7 +135,7 @@ class SimpleMPVView(context: Context, attrs: AttributeSet? = null) : BaseMPVView
     override fun postInitOptions() {
         // Performance
         mpv.setOptionString("vd-lavc-threads", "4")
-        mpv.setOptionString("demuxer-lavf-threads", "4")
+        mpv.setOptionString("demuxer-lavf-threads", "8")
         mpv.setOptionString("cache-initial", "0.5")
         mpv.setOptionString("untimed", "yes")
         
@@ -1097,7 +1097,8 @@ fun PlayerOverlay(
             }
         }
         
-        if (showVideoInfo) {
+        // NEW: title stays visible while the Replay prompt is showing
+        if (showVideoInfo || promptMode == PROMPT_REPLAY) {
             Text(
                 text = fileName,
                 style = TextStyle(
