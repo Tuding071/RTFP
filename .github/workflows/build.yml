@@ -13,18 +13,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: ๐งพ Checkout
+    - name: 🧾 Checkout
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
 
-    - name: โ• Setup JDK 17
+    - name: ☕ Setup JDK 17
       uses: actions/setup-java@v4
       with:
         distribution: 'adopt'
         java-version: '17'
 
-    - name: ๐“ Create structure
+    - name: 📁 Create structure
       run: |
         mkdir -p app/src/main/java/com/rtfp/player
         mkdir -p app/src/main/res/values
@@ -35,9 +35,9 @@ jobs:
         mkdir -p app/src/main/res/mipmap-xxxhdpi
         mkdir -p gradle/wrapper
         cp *.kt app/src/main/java/com/rtfp/player/ 2>/dev/null || true
-        echo "โ… Structure created"
+        echo "✅ Structure created"
 
-    - name: ๐“ Generate settings.gradle
+    - name: 📁 Generate settings.gradle
       run: |
         cat > settings.gradle << 'EOF'
         pluginManagement {
@@ -58,7 +58,7 @@ jobs:
         include ':app'
         EOF
 
-    - name: ๐“ Generate root build.gradle
+    - name: 📁 Generate root build.gradle
       run: |
         cat > build.gradle << 'EOF'
         buildscript {
@@ -77,7 +77,7 @@ jobs:
         }
         EOF
 
-    - name: ๐“ Generate app/build.gradle (arm64-v8a only)
+    - name: 📁 Generate app/build.gradle (arm64-v8a only)
       env:
         RUN_NUMBER: ${{ github.run_number }}
       run: |
@@ -149,7 +149,7 @@ jobs:
         }
         EOF
 
-    - name: ๐“ Generate AndroidManifest.xml
+    - name: 📁 Generate AndroidManifest.xml
       run: |
         cat > app/src/main/AndroidManifest.xml << 'EOF'
         <?xml version="1.0" encoding="utf-8"?>
@@ -219,7 +219,7 @@ jobs:
         </manifest>
         EOF
 
-    - name: ๐“ Generate strings.xml
+    - name: 📁 Generate strings.xml
       run: |
         cat > app/src/main/res/values/strings.xml << 'EOF'
         <?xml version="1.0" encoding="utf-8"?>
@@ -228,7 +228,7 @@ jobs:
         </resources>
         EOF
 
-    - name: ๐“ Generate gradle.properties
+    - name: 📁 Generate gradle.properties
       run: |
         cat > gradle.properties << 'EOF'
         org.gradle.jvmargs=-Xmx2048m
@@ -236,7 +236,7 @@ jobs:
         android.enableJetifier=true
         EOF
 
-    - name: ๐จ Create launcher icons
+    - name: 🎨 Create launcher icons
       run: |
         sudo apt-get update && sudo apt-get install -y imagemagick
 
@@ -267,15 +267,15 @@ jobs:
         gen_icon 144 app/src/main/res/mipmap-xxhdpi/ic_launcher.png
         gen_icon 192 app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
 
-        echo "โ… Launcher icons created (peach bg, dark brown play triangle, all densities identical style)"
+        echo "✅ Launcher icons created (peach bg, dark brown play triangle, all densities identical style)"
 
-    - name: ๐ Init Gradle wrapper
+    - name: 🐘 Init Gradle wrapper
       run: gradle wrapper --gradle-version 8.2
 
-    - name: ๐”“ Make gradlew executable
+    - name: 🔓 Make gradlew executable
       run: chmod +x ./gradlew
 
-    - name: ๐—๏ธ Build APK
+    - name: 🏗️ Build APK
       id: build
       run: |
         set +e
@@ -285,7 +285,7 @@ jobs:
         exit $BUILD_EXIT
       shell: bash
 
-    - name: ๐“ Save error log
+    - name: 📝 Save error log
       if: failure()
       run: |
         echo "## Build Failed" > error.md
@@ -293,7 +293,7 @@ jobs:
         grep -E "error|Error|FAILED" build.log | tail -50 >> error.md
         echo '```' >> error.md
 
-    - name: ๐“ค Upload error logs
+    - name: 📤 Upload error logs
       if: failure()
       uses: actions/upload-artifact@v4
       with:
@@ -302,7 +302,7 @@ jobs:
           error.md
           build.log
 
-    - name: โ๏ธ Sign APK
+    - name: ✍️ Sign APK
       if: success()
       env:
         RUN_NUMBER: ${{ github.run_number }}
@@ -319,7 +319,7 @@ jobs:
 
         apksigner verify "RTFP-${RUN_NUMBER}.apk"
 
-    - name: ๐“ฆ Create release ZIP
+    - name: 📦 Create release ZIP
       if: success()
       env:
         RUN_NUMBER: ${{ github.run_number }}
@@ -332,9 +332,9 @@ jobs:
         cd release
         zip -r "RTFP-${RUN_NUMBER}-complete.zip" .
         mv "RTFP-${RUN_NUMBER}-complete.zip" ../
-        echo "โ… Created RTFP-${RUN_NUMBER}-complete.zip with APK + sources"
+        echo "✅ Created RTFP-${RUN_NUMBER}-complete.zip with APK + sources"
 
-    - name: ๐“ค Upload complete package
+    - name: 📤 Upload complete package
       if: success()
       uses: actions/upload-artifact@v4
       with:
