@@ -233,12 +233,6 @@ jobs:
         private const val PROMPT_RESUME = 1
         private const val PROMPT_REPLAY = 2
 
-        // ===== NEW: cinematic pause states (tap-pause only) =====
-        private const val CINE_IDLE = 0      // normal behaviour
-        private const val CINE_HOLD = 1      // true pause while the effects are being set up
-        private const val CINE_LOOPING = 2   // slow-mo interpolated loop is running
-        private const val CINE_EXITING = 3   // staged exit in progress (taps ignored)
-
         // ===== NEW: resume position storage (one entry per file/link, max 200, oldest dropped) =====
         private object ResumeStore {
             private const val PREFS = "rtfp_resume"
@@ -681,20 +675,6 @@ jobs:
             var dragJob by remember { mutableStateOf<Job?>(null) }
             var latestDragPosition by remember { mutableStateOf(0f) }
 
-            // NEW: cinematic pause (tap-pause only): freeze -> set up in the background -> slow-mo loop of the last 250ms
-            val cineHoldMs = 800L            // total frozen time while the effects are set up
-            val cineStageDelayMs = 100L      // gap between setup stages
-            val cineExitDelayMs = 60L        // gap between exit stages
-            val cineWindowSec = 0.25         // loop length behind the pause point
-            val cineLoopEndPad = 0.02        // loop end sits just past the pause frame so that frame is actually shown
-            val cineSlowSpeed = 0.1
-            val cineInterpFps = 60.0         // display fps interpolation assumes (use 120.0 on a 120Hz screen)
-            var cineState by remember { mutableStateOf(CINE_IDLE) }
-            var cineJob by remember { mutableStateOf<Job?>(null) }
-            var cinePrevMute by remember { mutableStateOf(false) }
-            var cinePrevVideoSync by remember { mutableStateOf("audio") }
-            var cinePrevTscale by remember { mutableStateOf("mitchell") }
-
             var lastSeekTime by remember { mutableStateOf(0L) }
             var lastHorizontalUpdateTime by remember { mutableStateOf(0L) }
 
@@ -732,9 +712,8 @@ jobs:
             var seekGraceUntil by remember { mutableStateOf(0L) }
 
             // NEW: tell PlayerScreen when the user is seeking so its polling loops can stand down
-            LaunchedEffect(isSeeking, isDragging, cineState) {
-                // NEW: the cinematic loop counts too (it runs unpaused, so the other polling loops must stand down)
-                onSeekingChanged(isSeeking || isDragging || cineState != CINE_IDLE)
+            LaunchedEffect(isSeeking, isDragging) {
+                onSeekingChanged(isSeeking || isDragging)
             }
 
             // NEW: small grace period whenever a prompt closes (avoids a false "Buffering" blink)
@@ -777,13 +756,6 @@ jobs:
                     delay(300)
 
                     val now = System.currentTimeMillis()
-
-                    // NEW: cinematic pause (hold / loop / exit): position jumps and slow-mo are expected, no MPV calls
-                    if (cineState != CINE_IDLE) {
-                        lastChangeTime = now
-                        if (isBuffering) isBuffering = false
-                        continue
-                    }
 
                     if (currentPromptMode == PROMPT_NONE && !isSeeking && !isDragging && now >= seekGraceUntil) {
                         val eof = mpv.getPropertyBoolean("eof-reached") ?: false
@@ -901,149 +873,7 @@ jobs:
                 seekGraceUntil = System.currentTimeMillis() + 500
             }
 
-            // ===== NEW: cinematic pause helpers =====
-            // Sets any mpv property by name; a failure (property/option not changeable at runtime) is logged, never fatal
-            fun cineSet(prop: String, value: String) {
-                try {
-                    mpv.command("set", prop, value)
-                } catch (e: Exception) {
-                    Log.w("PlayerDebug", "cinematic: set $prop=$value failed: ${e.message}")
-                }
-            }
-
-            // Loop off, interpolation off, and the player's own sync/untimed/tscale values back
-            fun cineClearLoopAndInterpolation() {
-                cineSet("ab-loop-a", "no")
-                cineSet("ab-loop-b", "no")
-                cineSet("interpolation", "no")
-                cineSet("tscale", cinePrevTscale)
-                cineSet("display-fps-override", "0")
-                cineSet("video-sync", cinePrevVideoSync)
-                cineSet("untimed", "yes") // matches postInitOptions
-            }
-
-            fun cineRestoreSpeedAndAudio() {
-                mpv.setPropertyDouble("speed", 1.0)
-                mpv.setPropertyBoolean("mute", cinePrevMute)
-            }
-
-            // Instant drop back to a plain pause (used when another gesture starts, or the app goes to background).
-            // No delays needed: the video is paused, so nothing is visible.
-            fun abortCinematic() {
-                if (cineState == CINE_IDLE) return
-                cineJob?.cancel()
-                cineJob = null
-                mpv.setPropertyBoolean("pause", true)
-                cineClearLoopAndInterpolation()
-                cineRestoreSpeedAndAudio()
-                cineState = CINE_IDLE
-            }
-
-            // Tap while looping (or during the setup hold): staged exit, then resume from where the loop is (no seek to B)
-            fun startCinematicExit() {
-                cineJob?.cancel()
-                cineState = CINE_EXITING
-                cineJob = coroutineScope.launch {
-                    // 1. freeze the current loop frame
-                    mpv.setPropertyBoolean("pause", true)
-                    delay(cineExitDelayMs)
-
-                    // 2. loop off, interpolation off, sync/untimed back
-                    cineClearLoopAndInterpolation()
-                    delay(cineExitDelayMs)
-
-                    // 3. normal speed + audio back
-                    cineRestoreSpeedAndAudio()
-                    delay(cineExitDelayMs)
-
-                    // 4. resume from the current spot, with the same settle-seek a normal resume does
-                    val currentPos = mpv.getPropertyDouble("time-pos") ?: 0.0
-                    mpv.command("seek", currentPos.toString(), "absolute", "exact")
-                    delay(100)
-                    mpv.setPropertyBoolean("pause", false)
-                    seekGraceUntil = System.currentTimeMillis() + 500
-                    cineState = CINE_IDLE
-                }
-            }
-
-            // Called right after tap-pause: freeze for cineHoldMs while everything is set up in stages, then loop
-            fun startCinematicHold() {
-                cineState = CINE_HOLD
-                // remember the player's own values so exit puts them back exactly
-                cinePrevMute = mpv.getPropertyBoolean("mute") ?: false
-                cinePrevVideoSync = mpv.getPropertyString("video-sync") ?: "audio"
-                cinePrevTscale = mpv.getPropertyString("tscale") ?: "mitchell"
-                cineJob?.cancel()
-                cineJob = coroutineScope.launch {
-                    val holdStart = System.currentTimeMillis()
-
-                    // Stage 0: let the pause settle, then read the frozen position
-                    delay(cineStageDelayMs)
-                    val t = mpv.getPropertyDouble("time-pos")
-                    val dur = mpv.getPropertyDouble("duration") ?: 0.0
-                    if (t == null || dur <= 1.0) {
-                        cineState = CINE_IDLE
-                        return@launch
-                    }
-                    val a = (t - cineWindowSec).coerceAtLeast(0.0)
-                    val b = (t + cineLoopEndPad).coerceAtMost(dur - 0.05)
-                    if (b - a < 0.1) {
-                        // too close to the start/end for a useful loop: stay a plain pause
-                        cineState = CINE_IDLE
-                        return@launch
-                    }
-
-                    // Stage 1: loop window
-                    cineSet("ab-loop-a", a.toString())
-                    cineSet("ab-loop-b", b.toString())
-                    delay(cineStageDelayMs)
-
-                    // Stage 2: slow-mo + mute (audio at 0.1x is garbled)
-                    mpv.setPropertyDouble("speed", cineSlowSpeed)
-                    mpv.setPropertyBoolean("mute", true)
-                    delay(cineStageDelayMs)
-
-                    // Stage 3: interpolation needs display sync, so untimed goes off while it's active
-                    cineSet("untimed", "no")
-                    cineSet("video-sync", "display-resample")
-                    cineSet("display-fps-override", cineInterpFps.toString())
-                    cineSet("tscale", "linear")
-                    delay(cineStageDelayMs)
-                    cineSet("interpolation", "yes")
-                    Log.d(
-                        "PlayerDebug",
-                        "cinematic ON: a=$a b=$b speed=${mpv.getPropertyDouble("speed")} " +
-                            "interpolation=${mpv.getPropertyBoolean("interpolation")} " +
-                            "video-sync=${mpv.getPropertyString("video-sync")} " +
-                            "untimed=${mpv.getPropertyBoolean("untimed")}"
-                    )
-
-                    // Stage 4: wait out the rest of the hold window
-                    val remaining = cineHoldMs - (System.currentTimeMillis() - holdStart)
-                    if (remaining > 0) delay(remaining)
-
-                    // Stage 5: jump to the loop start, let the seek settle, then play (the A-B loop takes over)
-                    mpv.command("seek", a.toString(), "absolute", "exact")
-                    delay(cineStageDelayMs)
-                    mpv.setPropertyBoolean("pause", false)
-                    cineState = CINE_LOOPING
-                }
-            }
-
             fun handleTap() {
-                // NEW: tap during the loop (or its setup hold) = staged exit + resume; taps while exiting are ignored
-                if (cineState == CINE_EXITING) return
-                if (cineState != CINE_IDLE) {
-                    startCinematicExit()
-                    showPlaybackFeedback("Resume")
-                    if (showSeekbar) {
-                        showSeekbar = false
-                        showVideoInfo = false
-                    } else {
-                        showSeekbarWithTimeout()
-                    }
-                    return
-                }
                 val currentPaused = mpv.getPropertyBoolean("pause") ?: false
                 if (currentPaused) {
                     coroutineScope.launch {
@@ -1057,7 +887,6 @@ jobs:
                 } else {
                     mpv.setPropertyBoolean("pause", true)
                     showPlaybackFeedback("Pause")
-                    startCinematicHold() // NEW: only the tap-pause gesture starts the cinematic pause
                 }
                 if (showSeekbar) {
                     showSeekbar = false
@@ -1073,7 +902,6 @@ jobs:
                 coroutineScope.launch {
                     delay(longTapThreshold)
                     if (isTouching && !isHorizontalSwipe && !isVerticalSwipe) {
-                        abortCinematic() // NEW: long-press 2x during the cinematic drops back to a plain pause first
                         isLongTap = true
                         isSpeedingUp = true
                         mpv.setPropertyDouble("speed", 2.0)
@@ -1099,7 +927,6 @@ jobs:
             }
 
             fun startHorizontalSeeking(startX: Float) {
-                abortCinematic() // NEW: swipe-seek during the cinematic drops back to a plain pause first
                 isHorizontalSwipe = true
                 cancelAutoHide()
                 seekStartX = startX
@@ -1119,7 +946,6 @@ jobs:
             }
 
             fun startVerticalSwipe(startY: Float) {
-                abortCinematic() // NEW: quick-seek during the cinematic drops back to a plain pause first
                 isVerticalSwipe = true
                 cancelAutoHide()
                 val deltaY = startY - touchStartY
@@ -1248,7 +1074,6 @@ jobs:
             fun handleProgressBarDrag(newPosition: Float) {
                 cancelAutoHide()
                 if (!isSeeking) {
-                    abortCinematic() // NEW: no-op unless a cinematic pause is active
                     // Stage 1 (instant): UI state only, zero MPV calls
                     isSeeking = true
                     showSeekTime = true
@@ -1306,16 +1131,6 @@ jobs:
                 wasPlayingBeforeSeek = false
                 seekDirection = ""
                 seekGraceUntil = System.currentTimeMillis() + 500
-            }
-
-            // NEW: app goes to background mid-cinematic -> drop back to a plain pause with everything restored
-            val overlayLifecycleOwner = LocalLifecycleOwner.current
-            DisposableEffect(overlayLifecycleOwner) {
-                val observer = LifecycleEventObserver { _, event ->
-                    if (event == Lifecycle.Event.ON_PAUSE) abortCinematic()
-                }
-                overlayLifecycleOwner.lifecycle.addObserver(observer)
-                onDispose { overlayLifecycleOwner.lifecycle.removeObserver(observer) }
             }
 
             val videoInfoTextAlpha = if (isSeeking || isDragging) 0.0f else 1.0f
