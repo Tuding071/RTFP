@@ -671,9 +671,11 @@ jobs:
 
             // Seekbar interaction state:
             // - dragJob handles the delayed (~30 ms) pause fired on touch-down
+            // - hasDragged tracks whether the 30 dp dead zone was crossed (real seek)
             // - the 30 dp dead zone itself lives inside SimpleDraggableProgressBar
             var dragJob by remember { mutableStateOf<Job?>(null) }
             var latestDragPosition by remember { mutableStateOf(0f) }
+            var hasDragged by remember { mutableStateOf(false) }
 
             var lastSeekTime by remember { mutableStateOf(0L) }
             var lastHorizontalUpdateTime by remember { mutableStateOf(0L) }
@@ -1071,14 +1073,16 @@ jobs:
                 }
             }
 
-            // Fires the instant the seekbar is pressed: schedule the pause ~30 ms later,
-            // so an accidental touch is undone when the user lifts without moving.
+            // Fires the instant the seekbar is pressed: schedule the pause ~30 ms later.
+            // Also resets hasDragged so a tap-without-move stays a "pause only" gesture.
             fun handleSeekbarTouchDown() {
                 cancelAutoHide()
                 isSeeking = true
                 showSeekTime = true
                 showSeekbar = true
                 showVideoInfo = true
+                hasDragged = false
+                latestDragPosition = 0f
 
                 // Snapshot play/pause synchronously so even a very fast tap can restore state
                 wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
@@ -1093,10 +1097,11 @@ jobs:
             }
 
             // Only called after the 30 dp dead zone is crossed inside SimpleDraggableProgressBar.
-            // Also used to land the tap-to-seek position when the user taps without dragging.
+            // A tap (or touch-and-lift before 30 dp) does NOT call this.
             fun handleProgressBarDrag(newPosition: Float) {
                 cancelAutoHide()
                 isDragging = true
+                hasDragged = true
                 latestDragPosition = newPosition
 
                 val oldPosition = seekbarPosition
@@ -1118,20 +1123,23 @@ jobs:
                     mpv.setPropertyBoolean("pause", true)
                 }
 
-                // Land exactly on the final position (covers fast taps and the tail of a drag)
-                mpv.command("seek", latestDragPosition.toString(), "absolute", "exact")
-
-                if (wasPlayingBeforeSeek) {
-                    coroutineScope.launch {
-                        delay(100)
-                        mpv.setPropertyBoolean("pause", false)
+                if (hasDragged) {
+                    // Real drag: land exactly on the final position and resume if it was playing
+                    mpv.command("seek", latestDragPosition.toString(), "absolute", "exact")
+                    if (wasPlayingBeforeSeek) {
+                        coroutineScope.launch {
+                            delay(100)
+                            mpv.setPropertyBoolean("pause", false)
+                        }
                     }
                 }
+                // else: tap-without-drag -> stay paused, no seek, no resume
 
                 isSeeking = false
                 showSeekTime = false
                 wasPlayingBeforeSeek = false
                 seekDirection = ""
+                hasDragged = false
                 seekGraceUntil = System.currentTimeMillis() + 500
             }
 
@@ -1459,17 +1467,8 @@ jobs:
                                             }
                                             change.consume()
                                         } else {
-                                            // Released without crossing the dead zone -> tap seek
-                                            if (!hasStartedSeeking) {
-                                                val tapRatio =
-                                                    (down.position.x / size.width.toFloat())
-                                                        .coerceIn(0f, 1f)
-                                                val tapPosition =
-                                                    (tapRatio * safeDuration + 0.5f)
-                                                        .toInt().toFloat()
-                                                        .coerceIn(0f, safeDuration)
-                                                onValueChange(tapPosition)
-                                            }
+                                            // Released without crossing the 30 dp dead zone.
+                                            // No seek — the pause fired on touch-down sticks.
                                             break
                                         }
                                     }
