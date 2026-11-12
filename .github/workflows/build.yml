@@ -200,7 +200,8 @@ jobs:
         import androidx.compose.animation.core.Animatable
         import androidx.compose.animation.core.tween
         import androidx.compose.foundation.background
-        import androidx.compose.foundation.gestures.detectDragGestures
+        import androidx.compose.foundation.gestures.awaitEachGesture
+        import androidx.compose.foundation.gestures.awaitFirstDown
         import androidx.compose.foundation.layout.*
         import androidx.compose.material3.Text
         import androidx.compose.runtime.*
@@ -668,10 +669,9 @@ jobs:
             var isSeekInProgress by remember { mutableStateOf(false) }
             val seekThrottleMs = 11L
 
-            // NEW: staged seekbar drag start - the first-touch work is spread over stages
-            // (1 = UI only, 2 = pause, 3 = seeking live), each separated by dragStageDelayMs
-            val dragStageDelayMs = 50L
-            var dragStage by remember { mutableStateOf(0) } // 0 idle, 1 UI shown, 2 paused, 3 seeking live
+            // Seekbar interaction state:
+            // - dragJob handles the delayed (~30 ms) pause fired on touch-down
+            // - the 30 dp dead zone itself lives inside SimpleDraggableProgressBar
             var dragJob by remember { mutableStateOf<Job?>(null) }
             var latestDragPosition by remember { mutableStateOf(0f) }
 
@@ -1071,61 +1071,63 @@ jobs:
                 }
             }
 
+            // Fires the instant the seekbar is pressed: schedule the pause ~30 ms later,
+            // so an accidental touch is undone when the user lifts without moving.
+            fun handleSeekbarTouchDown() {
+                cancelAutoHide()
+                isSeeking = true
+                showSeekTime = true
+                showSeekbar = true
+                showVideoInfo = true
+
+                // Snapshot play/pause synchronously so even a very fast tap can restore state
+                wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
+
+                dragJob?.cancel()
+                dragJob = coroutineScope.launch {
+                    delay(30)
+                    if (wasPlayingBeforeSeek) {
+                        mpv.setPropertyBoolean("pause", true)
+                    }
+                }
+            }
+
+            // Only called after the 30 dp dead zone is crossed inside SimpleDraggableProgressBar.
+            // Also used to land the tap-to-seek position when the user taps without dragging.
             fun handleProgressBarDrag(newPosition: Float) {
                 cancelAutoHide()
-                if (!isSeeking) {
-                    // Stage 1 (instant): UI state only, zero MPV calls
-                    isSeeking = true
-                    showSeekTime = true
-                    showSeekbar = true
-                    showVideoInfo = true
-                    dragStage = 1
-                    dragJob?.cancel()
-                    dragJob = coroutineScope.launch {
-                        // Stage 2: pause (only if it was playing)
-                        delay(dragStageDelayMs)
-                        wasPlayingBeforeSeek = mpv.getPropertyBoolean("pause") == false
-                        if (wasPlayingBeforeSeek) {
-                            mpv.setPropertyBoolean("pause", true)
-                        }
-                        dragStage = 2
-
-                        // Stage 3: first seek, using the latest finger position (not the touch-down one)
-                        delay(dragStageDelayMs)
-                        dragStage = 3
-                        performStepSeek(latestDragPosition.toDouble())
-                    }
-
-                }
-                latestDragPosition = newPosition
                 isDragging = true
+                latestDragPosition = newPosition
+
                 val oldPosition = seekbarPosition
                 seekbarPosition = newPosition
                 seekDirection = if (newPosition > oldPosition) "+" else "-"
-                val targetPosition = newPosition.toDouble()
-                seekTargetTime = formatTimeSimple(targetPosition)
-                currentTime = formatTimeSimple(targetPosition)
+                seekTargetTime = formatTimeSimple(newPosition.toDouble())
+                currentTime = formatTimeSimple(newPosition.toDouble())
 
-                // NEW: seeks only go out once stage 3 is reached (stage 3 itself does the first one)
-                if (dragStage == 3) performStepSeek(targetPosition)
+                performStepSeek(newPosition.toDouble())
             }
 
             fun handleDragFinished() {
                 isDragging = false
-                // NEW: cancel any stage that hasn't run yet
                 dragJob?.cancel()
                 dragJob = null
-                if (dragStage == 1 || dragStage == 2) {
-                    // Lifted before the first seek went live: still land on the final position
-                    mpv.command("seek", latestDragPosition.toString(), "absolute", "exact")
+
+                // Fast tap: the 30 ms pause coroutine never ran, so pause synchronously now
+                if (wasPlayingBeforeSeek) {
+                    mpv.setPropertyBoolean("pause", true)
                 }
-                dragStage = 0
+
+                // Land exactly on the final position (covers fast taps and the tail of a drag)
+                mpv.command("seek", latestDragPosition.toString(), "absolute", "exact")
+
                 if (wasPlayingBeforeSeek) {
                     coroutineScope.launch {
                         delay(100)
                         mpv.setPropertyBoolean("pause", false)
                     }
                 }
+
                 isSeeking = false
                 showSeekTime = false
                 wasPlayingBeforeSeek = false
@@ -1261,6 +1263,7 @@ jobs:
                                         duration = seekbarDuration,
                                         onValueChange = { handleProgressBarDrag(it) },
                                         onValueChangeFinished = { handleDragFinished() },
+                                        onTouchDown = { handleSeekbarTouchDown() },
                                         getFreshPosition = { getFreshPosition() },
                                         modifier = Modifier.fillMaxSize().height(48.dp)
                                     )
@@ -1376,12 +1379,10 @@ jobs:
             duration: Float,
             onValueChange: (Float) -> Unit,
             onValueChangeFinished: () -> Unit,
+            onTouchDown: () -> Unit,
             getFreshPosition: () -> Float,
             modifier: Modifier = Modifier
         ) {
-            var dragStartX by remember { mutableStateOf(0f) }
-            var savedPositionAtTouch by remember { mutableStateOf(0f) }
-
             val safeDuration = if (duration > 0) duration else 1f
             val safePosition = position.coerceIn(0f, safeDuration)
             val progressFraction = (safePosition / safeDuration).coerceIn(0f, 1f)
@@ -1409,33 +1410,73 @@ jobs:
                         .height(48.dp)
                         .align(Alignment.CenterStart)
                         .pointerInput(Unit) {
-                            detectDragGestures(
-                                onDragStart = { offset ->
-                                    dragStartX = offset.x
-                                    savedPositionAtTouch = getFreshPosition().coerceIn(0f, safeDuration)
-                                },
-                                onDrag = { change, _ ->
-                                    change.consume()
-                                    val currentX = change.position.x
-                                    val totalMovementX = currentX - dragStartX
+                            val dragThresholdPx = 30.dp.toPx()
 
-                                    val deltaPosition = (totalMovementX / size.width) * safeDuration
-                                    val newPosition = (savedPositionAtTouch + deltaPosition)
-                                        .coerceIn(0f, safeDuration)
+                            awaitEachGesture {
+                                val down = awaitFirstDown(requireUnconsumed = false)
+                                down.consume()
 
-                                    val roundedPosition = (newPosition + 0.5f).toInt().toFloat()
+                                // Fire instantly so the overlay can schedule the 30 ms pause
+                                onTouchDown()
 
-                                    if (abs(roundedPosition - safePosition) > 0.1f) {
-                                        onValueChange(roundedPosition)
+                                var hasStartedSeeking = false
+                                var startX = 0f
+                                var savedPositionAtSeek = 0f
+                                var lastEmittedPosition = -1f
+
+                                try {
+                                    while (true) {
+                                        val event = awaitPointerEvent()
+                                        val change = event.changes.firstOrNull { it.id == down.id }
+                                            ?: break
+
+                                        if (change.pressed) {
+                                            val currentX = change.position.x
+
+                                            if (!hasStartedSeeking) {
+                                                // Dead zone: no seek commands until 30 dp of travel
+                                                if (abs(currentX - down.position.x) > dragThresholdPx) {
+                                                    hasStartedSeeking = true
+                                                    startX = currentX
+                                                    savedPositionAtSeek = getFreshPosition()
+                                                        .coerceIn(0f, safeDuration)
+                                                    lastEmittedPosition = savedPositionAtSeek
+                                                }
+                                            } else {
+                                                val deltaX = currentX - startX
+                                                val deltaPosition =
+                                                    (deltaX / size.width.toFloat()) * safeDuration
+                                                val newPosition =
+                                                    (savedPositionAtSeek + deltaPosition)
+                                                        .coerceIn(0f, safeDuration)
+                                                val roundedPosition =
+                                                    (newPosition + 0.5f).toInt().toFloat()
+
+                                                if (abs(roundedPosition - lastEmittedPosition) > 0.1f) {
+                                                    lastEmittedPosition = roundedPosition
+                                                    onValueChange(roundedPosition)
+                                                }
+                                            }
+                                            change.consume()
+                                        } else {
+                                            // Released without crossing the dead zone -> tap seek
+                                            if (!hasStartedSeeking) {
+                                                val tapRatio =
+                                                    (down.position.x / size.width.toFloat())
+                                                        .coerceIn(0f, 1f)
+                                                val tapPosition =
+                                                    (tapRatio * safeDuration + 0.5f)
+                                                        .toInt().toFloat()
+                                                        .coerceIn(0f, safeDuration)
+                                                onValueChange(tapPosition)
+                                            }
+                                            break
+                                        }
                                     }
-                                },
-                                onDragEnd = {
-                                    onValueChangeFinished()
-                                },
-                                onDragCancel = {
+                                } finally {
                                     onValueChangeFinished()
                                 }
-                            )
+                            }
                         }
                 )
             }
