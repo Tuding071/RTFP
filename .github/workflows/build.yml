@@ -1235,19 +1235,23 @@ jobs:
                 }
 
                 // Seekbar row hidden while a prompt is showing.
-                // KEY FIX: wrapContentHeight(unbounded = true) makes this container
-                // ignore the parent's minHeight = screen-height constraint, so it can
-                // shrink to its real content height instead of filling the screen.
+                // FIX: explicit height(120.dp) instead of wrapContentHeight(unbounded = true).
+                // wrapContentHeight lets content ignore min constraints but the node itself still
+                // reports the parent's min height, which was forcing the seekbar to center.
+                // An explicit height gives the node a real, small size that align(BottomStart)
+                // can actually pin to the bottom of the screen.
                 if (showSeekbar && promptMode == PROMPT_NONE) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .wrapContentHeight(unbounded = true)
+                            .height(120.dp)
                             .align(Alignment.BottomStart)
                             .padding(horizontal = 60.dp)
                     ) {
                         Column(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .align(Alignment.BottomCenter),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Box(modifier = Modifier.fillMaxWidth()) {
@@ -1850,31 +1854,4 @@ jobs:
           -alias key -keypass test1234 -keyalg RSA -keysize 2048 -validity 10000 \
           -dname "CN=RTFP"
 
-        APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
-        apksigner sign --ks dummy.keystore --ks-key-alias key \
-          --ks-pass pass:test1234 --key-pass pass:test1234 \
-          --out "RTFP-${RUN_NUMBER}.apk" "$APK"
-
-        apksigner verify "RTFP-${RUN_NUMBER}.apk"
-
-    - name: Create release ZIP
-      if: success()
-      env:
-        RUN_NUMBER: ${{ github.run_number }}
-      run: |
-        mkdir -p release
-        cp "RTFP-${RUN_NUMBER}.apk" release/
-        cp app/src/main/java/com/rtfp/player/*.kt release/
-        mkdir -p release/.github/workflows
-        cp .github/workflows/build.yml release/.github/workflows/
-        cd release
-        zip -r "RTFP-${RUN_NUMBER}-complete.zip" .
-        mv "RTFP-${RUN_NUMBER}-complete.zip" ../
-        echo "Created RTFP-${RUN_NUMBER}-complete.zip with APK + sources"
-
-    - name: Upload complete package
-      if: success()
-      uses: actions/upload-artifact@v4
-      with:
-        name: RTFP-${{ github.run_number }}-complete
-        path: RTFP-${{ github.run_number }}-complete.zip
+        APK=$(find app/build/outputs/apk/debug -name "
