@@ -1235,14 +1235,14 @@ jobs:
                 }
 
                 // Seekbar row hidden while a prompt is showing.
-                // NOTE: no wrapContentHeight() here — a Box without explicit height naturally
-                // wraps its content, and align(BottomStart) then pins that wrapped height to the
-                // bottom of the screen. (wrapContentHeight would have made it report screen-height
-                // to the parent and center its content vertically.)
+                // KEY FIX: wrapContentHeight(unbounded = true) makes this container
+                // ignore the parent's minHeight = screen-height constraint, so it can
+                // shrink to its real content height instead of filling the screen.
                 if (showSeekbar && promptMode == PROMPT_NONE) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .wrapContentHeight(unbounded = true)
                             .align(Alignment.BottomStart)
                             .padding(horizontal = 60.dp)
                     ) {
