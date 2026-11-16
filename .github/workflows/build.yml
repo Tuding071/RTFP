@@ -1234,9 +1234,7 @@ jobs:
                     }
                 }
 
-                // NEW: seekbar hidden while a prompt is showing.
-                // Layout note: outer Box is wrapContentHeight so the seekbar (80 dp touch area)
-                // sits at the bottom of the screen without extra offset hacks.
+                // Seekbar row hidden while a prompt is showing
                 if (showSeekbar && promptMode == PROMPT_NONE) {
                     Box(
                         modifier = Modifier
@@ -1267,8 +1265,8 @@ jobs:
                                     )
                                 }
                             }
-                            // Expanded seekbar row: 80 dp tall → big invisible touch area.
-                            // The visible 4 dp bar is centered inside, unchanged.
+                            // 80 dp tall touch row; the visible 4 dp bar lives at the BOTTOM
+                            // of the container so it keeps the original low position.
                             Box(modifier = Modifier.fillMaxWidth().height(80.dp)) {
                                 if (isDurationValid) {
                                     SimpleDraggableProgressBar(
@@ -1286,14 +1284,16 @@ jobs:
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .height(4.dp)
-                                                .align(Alignment.CenterStart)
+                                                .align(Alignment.BottomStart)
+                                                .offset(y = (-19).dp)
                                                 .background(Color.Gray.copy(alpha = 0.6f))
                                         )
                                         Box(
                                             modifier = Modifier
                                                 .fillMaxWidth(fraction = 0f)
                                                 .height(4.dp)
-                                                .align(Alignment.CenterStart)
+                                                .align(Alignment.BottomStart)
+                                                .offset(y = (-19).dp)
                                                 .background(Color.White)
                                         )
                                     }
@@ -1400,25 +1400,36 @@ jobs:
             val safePosition = position.coerceIn(0f, safeDuration)
             val progressFraction = (safePosition / safeDuration).coerceIn(0f, 1f)
 
-            // 80 dp tall touch container (was 48 dp) - the visible bar is still 4 dp, centered.
             Box(modifier = modifier.height(80.dp)) {
-                // Background track
+
+                // Visible bars - 48 dp region anchored at the BOTTOM of the 80 dp container,
+                // nudged down by 3 dp via offset to match the original "low" visual position
+                // (~19-23 dp from the screen edge). The extra 32 dp of hit area extends UPWARD.
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(4.dp)
-                        .align(Alignment.CenterStart)
-                        .background(Color.Gray.copy(alpha = 0.6f))
-                )
+                        .height(48.dp)
+                        .align(Alignment.BottomStart)
+                        .offset(y = 3.dp)
+                ) {
+                    // Background track
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .align(Alignment.Center)
+                            .background(Color.Gray.copy(alpha = 0.6f))
+                    )
 
-                // Filled track
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(fraction = progressFraction)
-                        .height(4.dp)
-                        .align(Alignment.CenterStart)
-                        .background(Color.White)
-                )
+                    // Filled track
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(fraction = progressFraction)
+                            .height(4.dp)
+                            .align(Alignment.Center)
+                            .background(Color.White)
+                    )
+                }
 
                 // Invisible touch area - fills the whole 80 dp container for a generous hit target
                 Box(
@@ -1475,8 +1486,7 @@ jobs:
                                             change.consume()
                                         } else {
                                             // Released without crossing the 30 dp dead zone.
-                                            // No seek — the pause fired on touch-down stays until
-                                            // handleDragFinished() decides whether to resume.
+                                            // No seek — handleDragFinished decides whether to resume.
                                             break
                                         }
                                     }
