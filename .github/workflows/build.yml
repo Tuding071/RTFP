@@ -1234,12 +1234,15 @@ jobs:
                     }
                 }
 
-                // Seekbar row hidden while a prompt is showing
+                // Seekbar row hidden while a prompt is showing.
+                // NOTE: no wrapContentHeight() here — a Box without explicit height naturally
+                // wraps its content, and align(BottomStart) then pins that wrapped height to the
+                // bottom of the screen. (wrapContentHeight would have made it report screen-height
+                // to the parent and center its content vertically.)
                 if (showSeekbar && promptMode == PROMPT_NONE) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .wrapContentHeight()
                             .align(Alignment.BottomStart)
                             .padding(horizontal = 60.dp)
                     ) {
@@ -1247,7 +1250,7 @@ jobs:
                             modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Box(modifier = Modifier.fillMaxWidth().wrapContentHeight()) {
+                            Box(modifier = Modifier.fillMaxWidth()) {
                                 Row(
                                     modifier = Modifier.align(Alignment.CenterStart),
                                     horizontalArrangement = Arrangement.spacedBy(2.dp)
@@ -1265,8 +1268,7 @@ jobs:
                                     )
                                 }
                             }
-                            // 80 dp tall touch row; the visible 4 dp bar lives at the BOTTOM
-                            // of the container so it keeps the original low position.
+                            // 80 dp tall touch row; visible 4 dp bar lives at the BOTTOM.
                             Box(modifier = Modifier.fillMaxWidth().height(80.dp)) {
                                 if (isDurationValid) {
                                     SimpleDraggableProgressBar(
@@ -1403,8 +1405,7 @@ jobs:
             Box(modifier = modifier.height(80.dp)) {
 
                 // Visible bars - 48 dp region anchored at the BOTTOM of the 80 dp container,
-                // nudged down by 3 dp via offset to match the original "low" visual position
-                // (~19-23 dp from the screen edge). The extra 32 dp of hit area extends UPWARD.
+                // nudged down by 3 dp via offset to match the original "low" visual position.
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
