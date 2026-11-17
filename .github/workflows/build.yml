@@ -674,9 +674,9 @@ jobs:
             // - the touch area is seekbarTouchHeight tall and sits flush on the bottom of the screen
             // - the visible 4 dp bar floats seekbarBottomGap above the bottom edge
             // - the time label sits timeToBarGap above the visible bar (46 dp = the distance it had before)
-            val seekbarTouchHeight = 80.dp
+            val seekbarTouchHeight = 65.dp
             val seekbarBottomGap = 12.dp
-            val timeToBarGap = 46.dp
+            val timeToBarGap = 36.dp
 
             // Seekbar interaction state:
             // - dragJob handles the delayed (~30 ms) pause fired on touch-down
