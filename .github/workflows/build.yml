@@ -218,6 +218,7 @@ jobs:
         import androidx.compose.ui.text.style.TextAlign
         import androidx.compose.ui.unit.dp
         import androidx.compose.ui.unit.sp
+        import androidx.compose.ui.unit.Dp
         import androidx.compose.ui.viewinterop.AndroidView
         import androidx.lifecycle.Lifecycle
         import androidx.lifecycle.LifecycleEventObserver
@@ -668,6 +669,14 @@ jobs:
             var seekDirection by remember { mutableStateOf("") }
             var isSeekInProgress by remember { mutableStateOf(false) }
             val seekThrottleMs = 11L
+
+            // Seekbar layout (tune here):
+            // - the touch area is seekbarTouchHeight tall and sits flush on the bottom of the screen
+            // - the visible 4 dp bar floats seekbarBottomGap above the bottom edge
+            // - the time label sits timeToBarGap above the visible bar (46 dp = the distance it had before)
+            val seekbarTouchHeight = 80.dp
+            val seekbarBottomGap = 12.dp
+            val timeToBarGap = 46.dp
 
             // Seekbar interaction state:
             // - dragJob handles the delayed (~30 ms) pause fired on touch-down
@@ -1129,7 +1138,7 @@ jobs:
                     mpv.command("seek", latestDragPosition.toString(), "absolute", "exact")
                 }
 
-                // Resume if it was playing — regardless of tap vs drag
+                // Resume if it was playing - regardless of tap vs drag
                 if (wasPlayingBeforeSeek) {
                     coroutineScope.launch {
                         delay(100)
@@ -1234,77 +1243,68 @@ jobs:
                     }
                 }
 
-                // Seekbar row hidden while a prompt is showing.
-                // FIX: explicit height(120.dp) instead of wrapContentHeight(unbounded = true).
-                // wrapContentHeight lets content ignore min constraints but the node itself still
-                // reports the parent's min height, which was forcing the seekbar to center.
-                // An explicit height gives the node a real, small size that align(BottomStart)
-                // can actually pin to the bottom of the screen.
+                // NEW: seekbar hidden while a prompt is showing.
+                // Layout: the touch container sits flush on the bottom of the screen; the visible 4 dp bar floats
+                // seekbarBottomGap above the bottom edge, and the time label follows it at timeToBarGap.
                 if (showSeekbar && promptMode == PROMPT_NONE) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(120.dp)
+                            .height(seekbarTouchHeight)
                             .align(Alignment.BottomStart)
                             .padding(horizontal = 60.dp)
                     ) {
-                        Column(
+                        if (isDurationValid) {
+                            SimpleDraggableProgressBar(
+                                position = seekbarPosition,
+                                duration = seekbarDuration,
+                                onValueChange = { handleProgressBarDrag(it) },
+                                onValueChangeFinished = { handleDragFinished() },
+                                onTouchDown = { handleSeekbarTouchDown() },
+                                getFreshPosition = { getFreshPosition() },
+                                barBottomGap = seekbarBottomGap,
+                                touchHeight = seekbarTouchHeight,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = seekbarBottomGap)
+                                        .height(4.dp)
+                                        .align(Alignment.BottomStart)
+                                        .background(Color.Gray.copy(alpha = 0.6f))
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(fraction = 0f)
+                                        .padding(bottom = seekbarBottomGap)
+                                        .height(4.dp)
+                                        .align(Alignment.BottomStart)
+                                        .background(Color.White)
+                                )
+                            }
+                        }
+
+                        // Time label: its bottom edge sits timeToBarGap above the top of the visible bar
+                        Row(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .align(Alignment.BottomCenter),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                                .align(Alignment.BottomStart)
+                                .offset(y = -(seekbarBottomGap + 4.dp + timeToBarGap)),
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
-                            Box(modifier = Modifier.fillMaxWidth()) {
-                                Row(
-                                    modifier = Modifier.align(Alignment.CenterStart),
-                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
-                                ) {
-                                    Text(
-                                        text = "$currentTime / $totalTime",
-                                        style = TextStyle(
-                                            color = Color.White.copy(alpha = timeDisplayTextAlpha),
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.Medium
-                                        ),
-                                        modifier = Modifier
-                                            .background(Color.DarkGray.copy(alpha = timeDisplayBackgroundAlpha))
-                                            .padding(horizontal = 12.dp, vertical = 4.dp)
-                                    )
-                                }
-                            }
-                            // 80 dp tall touch row; visible 4 dp bar lives at the BOTTOM.
-                            Box(modifier = Modifier.fillMaxWidth().height(80.dp)) {
-                                if (isDurationValid) {
-                                    SimpleDraggableProgressBar(
-                                        position = seekbarPosition,
-                                        duration = seekbarDuration,
-                                        onValueChange = { handleProgressBarDrag(it) },
-                                        onValueChangeFinished = { handleDragFinished() },
-                                        onTouchDown = { handleSeekbarTouchDown() },
-                                        getFreshPosition = { getFreshPosition() },
-                                        modifier = Modifier.fillMaxWidth().height(80.dp)
-                                    )
-                                } else {
-                                    Box(modifier = Modifier.fillMaxSize()) {
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(4.dp)
-                                                .align(Alignment.BottomStart)
-                                                .offset(y = (-19).dp)
-                                                .background(Color.Gray.copy(alpha = 0.6f))
-                                        )
-                                        Box(
-                                            modifier = Modifier
-                                                .fillMaxWidth(fraction = 0f)
-                                                .height(4.dp)
-                                                .align(Alignment.BottomStart)
-                                                .offset(y = (-19).dp)
-                                                .background(Color.White)
-                                        )
-                                    }
-                                }
-                            }
+                            Text(
+                                text = "$currentTime / $totalTime",
+                                style = TextStyle(
+                                    color = Color.White.copy(alpha = timeDisplayTextAlpha),
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium
+                                ),
+                                modifier = Modifier
+                                    .background(Color.DarkGray.copy(alpha = timeDisplayBackgroundAlpha))
+                                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                            )
                         }
                     }
                 }
@@ -1400,41 +1400,36 @@ jobs:
             onValueChangeFinished: () -> Unit,
             onTouchDown: () -> Unit,
             getFreshPosition: () -> Float,
+            barBottomGap: Dp,
+            touchHeight: Dp,
             modifier: Modifier = Modifier
         ) {
             val safeDuration = if (duration > 0) duration else 1f
             val safePosition = position.coerceIn(0f, safeDuration)
             val progressFraction = (safePosition / safeDuration).coerceIn(0f, 1f)
 
-            Box(modifier = modifier.height(80.dp)) {
-
-                // Visible bars - 48 dp region anchored at the BOTTOM of the 80 dp container,
-                // nudged down by 3 dp via offset to match the original "low" visual position.
+            // Touch container (touchHeight tall, flush on the screen bottom). The visible 4 dp bar sits
+            // barBottomGap above the bottom of the container.
+            Box(modifier = modifier.height(touchHeight)) {
+                // Background track
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp)
+                        .padding(bottom = barBottomGap)
+                        .height(4.dp)
                         .align(Alignment.BottomStart)
-                        .offset(y = 3.dp)
-                ) {
-                    // Background track
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(4.dp)
-                            .align(Alignment.Center)
-                            .background(Color.Gray.copy(alpha = 0.6f))
-                    )
+                        .background(Color.Gray.copy(alpha = 0.6f))
+                )
 
-                    // Filled track
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(fraction = progressFraction)
-                            .height(4.dp)
-                            .align(Alignment.Center)
-                            .background(Color.White)
-                    )
-                }
+                // Filled track
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(fraction = progressFraction)
+                        .padding(bottom = barBottomGap)
+                        .height(4.dp)
+                        .align(Alignment.BottomStart)
+                        .background(Color.White)
+                )
 
                 // Invisible touch area - fills the whole 80 dp container for a generous hit target
                 Box(
@@ -1491,7 +1486,8 @@ jobs:
                                             change.consume()
                                         } else {
                                             // Released without crossing the 30 dp dead zone.
-                                            // No seek — handleDragFinished decides whether to resume.
+                                            // No seek - the pause fired on touch-down stays until
+                                            // handleDragFinished() decides whether to resume.
                                             break
                                         }
                                     }
@@ -1854,4 +1850,31 @@ jobs:
           -alias key -keypass test1234 -keyalg RSA -keysize 2048 -validity 10000 \
           -dname "CN=RTFP"
 
-        APK=$(find app/build/outputs/apk/debug -name "
+        APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+        apksigner sign --ks dummy.keystore --ks-key-alias key \
+          --ks-pass pass:test1234 --key-pass pass:test1234 \
+          --out "RTFP-${RUN_NUMBER}.apk" "$APK"
+
+        apksigner verify "RTFP-${RUN_NUMBER}.apk"
+
+    - name: Create release ZIP
+      if: success()
+      env:
+        RUN_NUMBER: ${{ github.run_number }}
+      run: |
+        mkdir -p release
+        cp "RTFP-${RUN_NUMBER}.apk" release/
+        cp app/src/main/java/com/rtfp/player/*.kt release/
+        mkdir -p release/.github/workflows
+        cp .github/workflows/build.yml release/.github/workflows/
+        cd release
+        zip -r "RTFP-${RUN_NUMBER}-complete.zip" .
+        mv "RTFP-${RUN_NUMBER}-complete.zip" ../
+        echo "Created RTFP-${RUN_NUMBER}-complete.zip with APK + sources"
+
+    - name: Upload complete package
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: RTFP-${{ github.run_number }}-complete
+        path: RTFP-${{ github.run_number }}-complete.zip
